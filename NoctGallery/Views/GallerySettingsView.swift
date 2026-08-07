@@ -3,6 +3,7 @@ import SwiftUI
 struct GallerySettingsView: View {
     @EnvironmentObject private var model: GalleryViewModel
     @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("share.outputFormat") private var outputFormat = GalleryOutputFormat.heic.rawValue
     @AppStorage("share.maximumDimension") private var maximumDimension = 8_192
     @AppStorage("share.lossyQuality") private var lossyQuality = 0.90
@@ -57,6 +58,8 @@ struct GallerySettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(NoctGalleryTheme.background(for: colorScheme))
             .navigationTitle("Settings")
         }
     }

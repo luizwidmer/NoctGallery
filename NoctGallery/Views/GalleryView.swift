@@ -46,7 +46,7 @@ struct GalleryView: View {
                                 .accessibilityLabel("Photo from \(asset.dateLabel)")
                             }
                         }
-                        .padding(.horizontal, 3)
+                        .padding(.horizontal, 8)
                         .padding(.bottom, 20)
                     }
                     .refreshable { model.reload() }
@@ -97,7 +97,7 @@ private struct LimitedAccessBanner: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "photo.badge.checkmark")
-                .foregroundStyle(NoctGalleryTheme.teal)
+                .foregroundStyle(NoctGalleryTheme.success)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Limited Photo Access").font(.subheadline.weight(.semibold))
                 Text("Only the photos selected in iOS Settings are visible.")

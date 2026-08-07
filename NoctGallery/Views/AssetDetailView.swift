@@ -25,7 +25,8 @@ struct AssetDetailView: View {
                     contentMode: .fit
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: 420)
+                .aspectRatio(previewAspectRatio, contentMode: .fit)
+                .frame(maxHeight: 560)
                 .background(.black.opacity(0.86))
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
 
@@ -55,7 +56,7 @@ struct AssetDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .tint(NoctGalleryTheme.violet)
+                    .tint(NoctGalleryTheme.accent)
 
                     Button {
                         decoyProfile = MetadataForge.randomProfile()
@@ -95,6 +96,11 @@ struct AssetDetailView: View {
                 }
             }
         }
+    }
+
+    private var previewAspectRatio: CGFloat {
+        guard asset.pixelHeight > 0 else { return 1 }
+        return min(max(CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight), 0.72), 1.65)
     }
 }
 private struct DecoyMetadataSheet: View {

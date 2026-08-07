@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Noct Gallery app icon</title>
+  <desc id="desc">A sanitized photo card and clean sparkle in the Noctweave palette.</desc>
+  <defs>
+    <linearGradient id="surface" x1="96" y1="72" x2="928" y2="952" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2D1C23"/>
+      <stop offset="1" stop-color="#120B0F"/>
+    </linearGradient>
+    <linearGradient id="landscape" x1="270" y1="610" x2="742" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#922D35"/>
+      <stop offset="1" stop-color="#C96A61"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#surface)"/>
+  <rect x="214" y="252" width="540" height="500" rx="84" fill="#1B1217" stroke="#EBC7AF" stroke-width="28"/>
+  <rect x="274" y="192" width="536" height="500" rx="84" fill="#2A1B21" stroke="#FAF3EA" stroke-width="28"/>
+  <circle cx="650" cy="340" r="54" fill="#EBC7AF"/>
+  <path d="M302 626L438 474L536 574L606 506L782 674V664C782 694 758 718 728 718H328C298 718 274 694 274 664V650Z" fill="url(#landscape)"/>
+  <path d="M786 148L804 192L848 210L804 228L786 272L768 228L724 210L768 192Z" fill="#FAF3EA"/>
+  <circle cx="786" cy="210" r="17" fill="#C96A61"/>
+</svg>

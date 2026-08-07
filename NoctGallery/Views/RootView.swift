@@ -53,7 +53,7 @@ private struct MainTabView: View {
             GallerySettingsView()
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
-        .tint(NoctGalleryTheme.violet)
+        .tint(NoctGalleryTheme.accent)
     }
 }
 
@@ -98,7 +98,7 @@ private struct OnboardingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(NoctGalleryTheme.violet)
+                .tint(NoctGalleryTheme.accent)
 
                 Text("PhotoKit requires read access to display the gallery. Noct Gallery does not modify or upload your originals.")
                     .font(.footnote)
