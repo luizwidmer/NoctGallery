@@ -1,5 +1,7 @@
 # Noct Gallery
 
+[![License: AGPL v3 or later](https://img.shields.io/badge/license-AGPL--3.0--or--later-6757d9.svg)](LICENSE)
+
 Noct Gallery is a privacy-first viewer and sharing layer for the existing iPhone and iPad photo library. It does not import media into a second vault or retain private copies. Images are read from PhotoKit and processed only when the user shares them.
 
 ## What works
@@ -41,3 +43,13 @@ xcodebuild \
 iOS does not expose Photos as a replaceable default-app category. Noct Gallery can replace the user’s gallery workflow, but it cannot become the operating system’s Photos app. The original remains in the system library and is never modified by Noct Gallery.
 
 PhotoKit may download an iCloud-backed original when the user shares it. A sanitized export must briefly exist as a randomized temporary file because the iOS share sheet consumes a file URL; Noct Gallery deletes that file on completion or cancellation and also purges stale exports at launch. Decoy metadata is optional and does not guarantee anonymity: image content, upload timing, account data, and generated-value patterns may still identify someone. See `SECURITY.md` for the complete threat boundary.
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes. Report
+vulnerabilities privately using [SECURITY.md](SECURITY.md).
+
+## License
+
+Copyright (C) 2026 Luiz Widmer. Noct Gallery is free software licensed under
+the [GNU Affero General Public License v3.0 or later](LICENSE).
