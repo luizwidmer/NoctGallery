@@ -93,7 +93,7 @@ private struct OnboardingView: View {
                 }
 
                 Button(action: continueAction) {
-                    Text("Continue to Photo Access")
+                    Text("Choose Photos to Share")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)

@@ -7,6 +7,7 @@ struct AssetDetailView: View {
     @AppStorage("share.lossyQuality") private var lossyQuality = 0.90
     let asset: PhotoAssetRecord
     @State private var decoyProfile: SyntheticMetadataProfile?
+    @State private var showsAdvancedSharing = false
 
     private var configuration: ImageSanitizer.Configuration {
         GalleryPreferences.configuration(
@@ -51,21 +52,29 @@ struct AssetDetailView: View {
                             )
                         }
                     } label: {
-                        Label("Share Sanitized Copy", systemImage: "square.and.arrow.up")
+                        Label("Sanitize & Share", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .tint(NoctGalleryTheme.accent)
 
-                    Button {
-                        decoyProfile = MetadataForge.randomProfile()
-                    } label: {
-                        Label("Share with Decoy Metadata", systemImage: "theatermasks")
-                            .frame(maxWidth: .infinity)
+                    DisclosureGroup("Advanced sharing", isExpanded: $showsAdvancedSharing) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Decoy metadata is optional and can be recognized as synthetic. Normal sanitized sharing is the recommended path.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Button {
+                                decoyProfile = MetadataForge.randomProfile()
+                            } label: {
+                                Label("Create Share with Decoy Metadata", systemImage: "theatermasks")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        }
+                        .padding(.top, 8)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
                 }
                 .disabled(model.exportingAssetID != nil)
 
