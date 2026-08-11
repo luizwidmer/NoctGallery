@@ -14,6 +14,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private let exportStore: TemporaryExportStore
     private let sanitizer: ImageSanitizer
     private var started = false
+    private var observesLibraryChanges = false
 
     init(
         library: PhotoLibraryService = PhotoLibraryService(),
@@ -28,16 +29,18 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     deinit {
-        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        if observesLibraryChanges {
+            PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        }
     }
 
     func start() async {
         guard !started else { return }
         started = true
-        PHPhotoLibrary.shared().register(self)
         try? await exportStore.purgeAll()
         authorizationStatus = library.authorizationStatus
         if canReadLibrary {
+            beginObservingLibraryChangesIfNeeded()
             reload()
         }
     }
@@ -45,6 +48,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     func requestAccess() async {
         authorizationStatus = await library.requestAuthorization()
         if canReadLibrary {
+            beginObservingLibraryChangesIfNeeded()
             reload()
         }
     }
@@ -62,6 +66,12 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     var canReadLibrary: Bool {
         authorizationStatus == .authorized || authorizationStatus == .limited
+    }
+
+    private func beginObservingLibraryChangesIfNeeded() {
+        guard !observesLibraryChanges else { return }
+        PHPhotoLibrary.shared().register(self)
+        observesLibraryChanges = true
     }
 
     func thumbnail(for asset: PhotoAssetRecord, targetSize: CGSize) async -> UIImage? {

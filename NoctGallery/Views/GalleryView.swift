@@ -74,17 +74,22 @@ struct PhotoThumbnailView: View {
     @State private var image: UIImage?
 
     var body: some View {
-        ZStack {
-            Rectangle().fill(.quaternary)
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
-                    .transition(.opacity)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
+        GeometryReader { proxy in
+            ZStack {
+                Rectangle().fill(.quaternary)
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                        .transition(.opacity)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .clipped()
         .task(id: asset.id) {
