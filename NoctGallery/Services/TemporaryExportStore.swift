@@ -22,8 +22,13 @@ actor TemporaryExportStore {
         try prepareDirectory()
         let filename = "shared-\(UUID().uuidString.lowercased()).\(image.fileExtension)"
         let url = rootURL.appendingPathComponent(filename, isDirectory: false)
-        try image.data.write(to: url, options: [.atomic, .completeFileProtection])
-        try applyProtection(to: url)
+        do {
+            try image.data.write(to: url, options: [.atomic, .completeFileProtection])
+            try applyProtection(to: url)
+        } catch {
+            try? fileManager.removeItem(at: url)
+            throw error
+        }
         return url
     }
 
@@ -35,8 +40,9 @@ actor TemporaryExportStore {
     }
 
     func purgeAll() throws {
-        guard fileManager.fileExists(atPath: rootURL.path) else { return }
-        try fileManager.removeItem(at: rootURL)
+        if fileManager.fileExists(atPath: rootURL.path) {
+            try fileManager.removeItem(at: rootURL)
+        }
     }
 
     private func prepareDirectory() throws {

@@ -15,6 +15,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private let sanitizer: ImageSanitizer
     private var started = false
     private var observesLibraryChanges = false
+    private var shareExportLifecycle = ShareExportLifecycle()
 
     init(
         library: PhotoLibraryService = PhotoLibraryService(),
@@ -97,6 +98,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 )
             }.value
             let url = try await exportStore.write(image)
+            shareExportLifecycle.present(url)
             sharePayload = SharePayload(url: url, syntheticProfile: syntheticMetadata)
         } catch {
             errorMessage = error.localizedDescription
@@ -104,10 +106,11 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func finishShare() {
-        guard let payload = sharePayload else { return }
+        let exportURL = shareExportLifecycle.dismiss()
         sharePayload = nil
+        guard let exportURL else { return }
         Task {
-            try? await exportStore.remove(payload.url)
+            try? await exportStore.remove(exportURL)
         }
     }
 
@@ -125,6 +128,20 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 }
+
+struct ShareExportLifecycle {
+    private var presentedURL: URL?
+
+    mutating func present(_ url: URL) {
+        presentedURL = url
+    }
+
+    mutating func dismiss() -> URL? {
+        defer { presentedURL = nil }
+        return presentedURL
+    }
+}
+
 enum GalleryPreferences {
     static func configuration(format: String, maximumDimension: Int, quality: Double) -> ImageSanitizer.Configuration {
         var configuration = ImageSanitizer.Configuration()

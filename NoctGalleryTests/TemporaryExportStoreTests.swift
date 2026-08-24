@@ -45,4 +45,32 @@ final class TemporaryExportStoreTests: XCTestCase {
         try await store.purgeAll()
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
+
+    func testShareLifecycleRetainsCleanupURLAfterPresentationBindingClears() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoctGalleryTests-\(UUID().uuidString)", isDirectory: true)
+        let store = TemporaryExportStore(rootURL: root)
+        let image = SanitizedImage(
+            data: Data([0x01, 0x02]),
+            sourceByteCount: 2,
+            pixelWidth: 1,
+            pixelHeight: 1,
+            outputUTType: "public.jpeg",
+            fileExtension: "jpg",
+            sha256: "test",
+            removedMetadataKeys: []
+        )
+
+        let url = try await store.write(image)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        // SwiftUI clears the item binding before running a sheet's onDismiss
+        // callback. The lifecycle retains the exact URL independently.
+        var lifecycle = ShareExportLifecycle()
+        lifecycle.present(url)
+        let cleanupURL = try XCTUnwrap(lifecycle.dismiss())
+        XCTAssertNil(lifecycle.dismiss())
+        try await store.remove(cleanupURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
 }
