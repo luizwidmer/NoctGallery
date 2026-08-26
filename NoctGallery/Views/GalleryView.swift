@@ -54,12 +54,6 @@ struct GalleryView: View {
             }
             .navigationTitle("Gallery")
             .searchable(text: $searchText, prompt: "Search dates or dimensions")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Refresh", systemImage: "arrow.clockwise") { model.reload() }
-                        .labelStyle(.iconOnly)
-                }
-            }
             .navigationDestination(for: PhotoAssetRecord.self) { asset in
                 AssetDetailView(asset: asset)
             }

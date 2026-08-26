@@ -7,6 +7,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published private(set) var authorizationStatus: PHAuthorizationStatus
     @Published private(set) var isLoading = false
     @Published private(set) var exportingAssetID: String?
+    @Published private(set) var hasTemporaryShareFiles = false
     @Published var sharePayload: SharePayload?
     @Published var errorMessage: String?
 
@@ -39,6 +40,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         guard !started else { return }
         started = true
         try? await exportStore.purgeAll()
+        hasTemporaryShareFiles = false
         authorizationStatus = library.authorizationStatus
         if canReadLibrary {
             beginObservingLibraryChangesIfNeeded()
@@ -98,6 +100,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 )
             }.value
             let url = try await exportStore.write(image)
+            hasTemporaryShareFiles = true
             shareExportLifecycle.present(url)
             sharePayload = SharePayload(url: url, syntheticProfile: syntheticMetadata)
         } catch {
@@ -110,13 +113,19 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         sharePayload = nil
         guard let exportURL else { return }
         Task {
-            try? await exportStore.remove(exportURL)
+            do {
+                try await exportStore.remove(exportURL)
+                hasTemporaryShareFiles = false
+            } catch {
+                hasTemporaryShareFiles = true
+            }
         }
     }
 
     func purgeTemporaryExports() async {
         do {
             try await exportStore.purgeAll()
+            hasTemporaryShareFiles = false
         } catch {
             errorMessage = error.localizedDescription
         }

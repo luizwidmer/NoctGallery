@@ -59,6 +59,10 @@ struct AssetDetailView: View {
                     .controlSize(.large)
                     .tint(NoctGalleryTheme.accent)
 
+                    Label("Shares use a protected, sanitized temporary copy; your original stays in Photos.", systemImage: "checkmark.shield")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     DisclosureGroup("Advanced sharing", isExpanded: $showsAdvancedSharing) {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Decoy metadata is optional and can be recognized as synthetic. Normal sanitized sharing is the recommended path.")
@@ -83,7 +87,7 @@ struct AssetDetailView: View {
                         .padding(.vertical, 8)
                 }
 
-                Text("Noct Gallery requests the original only after you choose a share action. iCloud may download the source at that moment.")
+                Text("The original is requested only when sharing; iCloud may download it then.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -91,7 +95,7 @@ struct AssetDetailView: View {
             }
             .padding(16)
         }
-        .navigationTitle(asset.creationDate?.formatted(date: .abbreviated, time: .omitted) ?? "Photo")
+        .navigationTitle("Photo")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $decoyProfile) { profile in
             DecoyMetadataSheet(initialProfile: profile) { chosenProfile in

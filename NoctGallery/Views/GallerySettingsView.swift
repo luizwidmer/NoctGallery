@@ -17,25 +17,34 @@ struct GallerySettingsView: View {
                             Text(format.title).tag(format.rawValue)
                         }
                     }
-                    Picker("Maximum edge", selection: $maximumDimension) {
-                        Text("2,048 px").tag(2_048)
-                        Text("4,096 px").tag(4_096)
-                        Text("8,192 px").tag(8_192)
+                    DisclosureGroup("Advanced Share Defaults") {
+                        Picker("Maximum edge", selection: $maximumDimension) {
+                            Text("2,048 px").tag(2_048)
+                            Text("4,096 px").tag(4_096)
+                            Text("8,192 px").tag(8_192)
+                        }
+                        if selectedFormat != .png {
+                            VStack(alignment: .leading, spacing: 8) {
+                                LabeledContent("Lossy quality", value: lossyQuality.formatted(.percent.precision(.fractionLength(0))))
+                                Slider(value: $lossyQuality, in: 0.65 ... 1.0, step: 0.01)
+                            }
+                        }
+                        Text("HEIC falls back to JPEG only when this device cannot encode HEIC.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        LabeledContent("Lossy quality", value: lossyQuality.formatted(.percent.precision(.fractionLength(0))))
-                        Slider(value: $lossyQuality, in: 0.65 ... 1.0, step: 0.01)
-                    }
-                    Text("PNG ignores the lossy quality value. HEIC falls back to JPEG if the current device cannot encode HEIC.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
 
-                Section("Storage") {
-                    LabeledContent("Private media copies", value: "None")
-                    LabeledContent("Source of truth", value: "Apple Photos")
-                    Button("Clear Temporary Share Files", systemImage: "trash") {
-                        Task { await model.purgeTemporaryExports() }
+                Section("Privacy & storage") {
+                    DisclosureGroup("How sharing works") {
+                        Text("Noct Gallery reads the selected original on demand, rebuilds a bounded image from decoded pixels, and hands the share sheet a protected temporary file. Apple Photos remains the source of truth.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if model.hasTemporaryShareFiles {
+                        Button("Clear Temporary Share Files", systemImage: "trash") {
+                            Task { await model.purgeTemporaryExports() }
+                        }
                     }
                     Text("Temporary files use complete file protection, are excluded from backup, and are removed after the share sheet closes.")
                         .font(.footnote)
@@ -73,5 +82,9 @@ struct GallerySettingsView: View {
         case .notDetermined: "Not requested"
         @unknown default: "Unknown"
         }
+    }
+
+    private var selectedFormat: GalleryOutputFormat {
+        GalleryOutputFormat(rawValue: outputFormat) ?? .heic
     }
 }

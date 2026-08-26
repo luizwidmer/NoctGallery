@@ -48,8 +48,6 @@ private struct MainTabView: View {
         TabView {
             GalleryView()
                 .tabItem { Label("Gallery", systemImage: "photo.stack") }
-            SharePrivacyView()
-                .tabItem { Label("Share", systemImage: "shield.lefthalf.filled") }
             GallerySettingsView()
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
