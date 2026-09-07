@@ -24,7 +24,7 @@ struct GalleryView: View {
                     ContentUnavailableView(
                         searchText.isEmpty ? "No Photos Available" : "No Matches",
                         systemImage: searchText.isEmpty ? "photo.stack" : "magnifyingglass",
-                        description: Text(searchText.isEmpty ? "Photos allowed through PhotoKit will appear here." : "Try a date or image dimension.")
+                        description: Text(searchText.isEmpty ? "Photos you allow access to will appear here." : "Try a date or image dimension.")
                     )
                 } else {
                     ScrollView {

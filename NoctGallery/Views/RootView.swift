@@ -81,7 +81,7 @@ private struct OnboardingView: View {
                     OnboardingPoint(
                         icon: "wand.and.sparkles",
                         title: "Clean only when sharing",
-                        detail: "The selected original is bounded, decoded, normalized, and re-encoded at share time."
+                        detail: "Removes hidden metadata and creates a fresh share copy. Your original stays in Photos."
                     )
                     OnboardingPoint(
                         icon: "theatermasks",
@@ -98,7 +98,7 @@ private struct OnboardingView: View {
                 .controlSize(.large)
                 .tint(NoctGalleryTheme.accent)
 
-                Text("PhotoKit requires read access to display the gallery. Noct Gallery does not modify or upload your originals.")
+                Text("Photo access lets you browse your library. Noct Gallery does not modify or upload your originals.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -144,7 +144,7 @@ private struct PhotoPermissionView: View {
         ContentUnavailableView {
             Label("Photo Access Needed", systemImage: "photo.badge.exclamationmark")
         } description: {
-            Text("Noct Gallery needs PhotoKit access to display your existing library. It does not create a second copy.")
+            Text("Allow photo access to browse your existing library and choose an image to share.")
         } actions: {
             if status == .notDetermined {
                 Button("Allow Photo Access", action: request)

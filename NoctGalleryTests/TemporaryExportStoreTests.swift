@@ -21,6 +21,10 @@ final class TemporaryExportStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         XCTAssertTrue(url.lastPathComponent.hasPrefix("shared-"))
         XCTAssertFalse(url.lastPathComponent.contains("original"))
+        let filePermissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
+        let directoryPermissions = try FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(filePermissions?.intValue, 0o600)
+        XCTAssertEqual(directoryPermissions?.intValue, 0o700)
 
         try await store.remove(url)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
@@ -72,5 +76,42 @@ final class TemporaryExportStoreTests: XCTestCase {
         XCTAssertNil(lifecycle.dismiss())
         try await store.remove(cleanupURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testCleanupRejectsNestedSymlinkEscape() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = directory.appendingPathComponent("exports")
+        let outside = directory.appendingPathComponent("unrelated")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let victim = outside.appendingPathComponent("shared-photo.jpg")
+        let original = Data("preserve this file".utf8)
+        try original.write(to: victim)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        do {
+            try await TemporaryExportStore(rootURL: root).remove(link.appendingPathComponent(victim.lastPathComponent))
+            XCTFail("Cleanup must reject nested paths")
+        } catch TemporaryExportStore.ExportError.invalidExportURL {}
+        XCTAssertEqual(try Data(contentsOf: victim), original)
+    }
+
+    @MainActor
+    func testFailedLaunchCleanupRemainsVisible() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manager = FailingCleanupFileManager()
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: directory, fileManager: manager))
+        await model.start()
+        XCTAssertTrue(model.hasTemporaryShareFiles)
+        XCTAssertNotNil(model.errorMessage)
+    }
+}
+
+private final class FailingCleanupFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws {
+        throw CocoaError(.fileWriteNoPermission)
     }
 }

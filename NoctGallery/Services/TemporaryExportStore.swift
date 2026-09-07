@@ -19,12 +19,15 @@ actor TemporaryExportStore {
     }
 
     func write(_ image: SanitizedImage) throws -> URL {
+        guard ["heic", "jpg", "png"].contains(image.fileExtension) else {
+            throw ExportError.invalidExportURL
+        }
         try prepareDirectory()
         let filename = "shared-\(UUID().uuidString.lowercased()).\(image.fileExtension)"
         let url = rootURL.appendingPathComponent(filename, isDirectory: false)
         do {
             try image.data.write(to: url, options: [.atomic, .completeFileProtection])
-            try applyProtection(to: url)
+            try applyProtection(to: url, permissions: 0o600)
         } catch {
             try? fileManager.removeItem(at: url)
             throw error
@@ -46,18 +49,32 @@ actor TemporaryExportStore {
     }
 
     private func prepareDirectory() throws {
-        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        try applyProtection(to: rootURL)
+        try fileManager.createDirectory(
+            at: rootURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let attributes = try fileManager.attributesOfItem(atPath: rootURL.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw ExportError.invalidExportURL
+        }
+        try applyProtection(to: rootURL, permissions: 0o700)
     }
 
     private func contains(_ url: URL) -> Bool {
-        let root = rootURL.standardizedFileURL.path
-        let candidate = url.standardizedFileURL.path
-        return candidate.hasPrefix(root + "/")
+        guard url.isFileURL else { return false }
+        // Only files returned by write are eligible, never a nested path that
+        // could traverse a symbolic link into another directory.
+        let candidate = url.standardizedFileURL
+        return candidate.deletingLastPathComponent().path == rootURL.standardizedFileURL.path
+            && candidate.lastPathComponent.hasPrefix("shared-")
     }
 
-    private func applyProtection(to url: URL) throws {
-        try fileManager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+    private func applyProtection(to url: URL, permissions: Int) throws {
+        try fileManager.setAttributes([
+            .protectionKey: FileProtectionType.complete,
+            .posixPermissions: permissions
+        ], ofItemAtPath: url.path)
         var protectedURL = url
         var values = URLResourceValues()
         values.isExcludedFromBackup = true

@@ -39,8 +39,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     func start() async {
         guard !started else { return }
         started = true
-        try? await exportStore.purgeAll()
-        hasTemporaryShareFiles = false
+        do {
+            try await exportStore.purgeAll()
+            hasTemporaryShareFiles = false
+        } catch {
+            hasTemporaryShareFiles = true
+            errorMessage = "Temporary share files could not be removed. Retry cleanup in Settings."
+        }
         authorizationStatus = library.authorizationStatus
         if canReadLibrary {
             beginObservingLibraryChangesIfNeeded()
@@ -118,6 +123,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 hasTemporaryShareFiles = false
             } catch {
                 hasTemporaryShareFiles = true
+                errorMessage = "The temporary shared photo could not be removed. Retry cleanup in Settings."
             }
         }
     }
