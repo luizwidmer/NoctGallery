@@ -30,23 +30,24 @@ struct GalleryView: View {
                     ScrollView {
                         if model.authorizationStatus == .limited {
                             LimitedAccessBanner()
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal, 16)
                                 .padding(.top, 8)
                         }
                         LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 112, maximum: 220), spacing: 3)],
-                            spacing: 3
+                            columns: [GridItem(.adaptive(minimum: 104, maximum: 220), spacing: 8)],
+                            spacing: 8
                         ) {
                             ForEach(filteredAssets) { asset in
                                 NavigationLink(value: asset) {
                                     PhotoThumbnailView(asset: asset)
                                         .aspectRatio(1, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Photo from \(asset.dateLabel)")
                             }
                         }
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 16)
                         .padding(.bottom, 20)
                     }
                     .refreshable { model.reload() }
