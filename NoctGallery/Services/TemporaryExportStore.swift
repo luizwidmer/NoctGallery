@@ -11,6 +11,7 @@ actor TemporaryExportStore {
 
     private let rootURL: URL
     private let fileManager: FileManager
+    private var sessionID = UUID()
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -18,7 +19,10 @@ actor TemporaryExportStore {
             .appendingPathComponent("NoctGalleryShareExports", isDirectory: true)
     }
 
-    func write(_ image: SanitizedImage) throws -> URL {
+    func currentSession() -> UUID { sessionID }
+
+    func write(_ image: SanitizedImage, session: UUID? = nil) throws -> URL {
+        if let session, session != sessionID { throw CancellationError() }
         guard ["heic", "jpg", "png"].contains(image.fileExtension) else {
             throw ExportError.invalidExportURL
         }
@@ -46,6 +50,12 @@ actor TemporaryExportStore {
         if fileManager.fileExists(atPath: rootURL.path) {
             try fileManager.removeItem(at: rootURL)
         }
+    }
+
+    /// Invalidates work started before reset, including an export still decoding.
+    func reset() throws {
+        sessionID = UUID()
+        try purgeAll()
     }
 
     private func prepareDirectory() throws {

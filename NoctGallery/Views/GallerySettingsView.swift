@@ -7,6 +7,8 @@ struct GallerySettingsView: View {
     @AppStorage("share.outputFormat") private var outputFormat = GalleryOutputFormat.heic.rawValue
     @AppStorage("share.maximumDimension") private var maximumDimension = 8_192
     @AppStorage("share.lossyQuality") private var lossyQuality = 0.90
+    @State private var showsResetConfirmation = false
+    @State private var resetConfirmation = ""
 
     var body: some View {
         NavigationStack {
@@ -60,6 +62,20 @@ struct GallerySettingsView: View {
                     }
                 }
 
+                Section("Reset app") {
+                    Button("Purge and Reset App…", role: .destructive) {
+                        resetConfirmation = ""
+                        showsResetConfirmation = true
+                    }
+                    .disabled(model.isResetting)
+                    .accessibilityIdentifier("app.purgeAndReset")
+                    Text("Remove temporary share files, cached previews, and all app settings, then start onboarding again. Your Photos originals and copies already shared remain unchanged.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section { AppSupportCard().listRowInsets(EdgeInsets()) }
+
                 Section("About") {
                     LabeledContent("Version", value: "0.1.0")
                     Text("Noct Gallery contains no analytics, tracking SDK, advertising SDK, or application network client. PhotoKit may access iCloud when an original is not stored locally.")
@@ -70,6 +86,18 @@ struct GallerySettingsView: View {
             .scrollContentBackground(.hidden)
             .background(NoctGalleryTheme.background(for: colorScheme))
             .navigationTitle("Settings")
+            .alert("Purge and reset Noct Gallery?", isPresented: $showsResetConfirmation) {
+                TextField("Type RESET to confirm", text: $resetConfirmation)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Purge and Reset", role: .destructive) {
+                    Task { await model.purgeAndReset() }
+                }
+                .disabled(resetConfirmation != "RESET")
+            } message: {
+                Text("This deletes this app’s temporary files and settings. It cannot be undone. Your Photos library is not deleted.")
+            }
         }
     }
 

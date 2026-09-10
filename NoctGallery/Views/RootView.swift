@@ -16,15 +16,12 @@ struct RootView: View {
                     completedOnboarding = true
                     Task { await model.requestAccess() }
                 }
-            } else if model.canReadLibrary {
-                MainTabView()
             } else {
-                PhotoPermissionView(status: model.authorizationStatus) {
-                    Task { await model.requestAccess() }
-                }
+                MainTabView()
             }
         }
-        .task { await model.start() }
+        .id(model.resetGeneration)
+        .task(id: model.resetGeneration) { await model.start() }
         .sheet(item: $model.sharePayload, onDismiss: model.finishShare) { payload in
             ShareSheet(url: payload.url, completion: model.finishShare)
                 .presentationDetents([.medium, .large])
@@ -44,9 +41,18 @@ struct RootView: View {
     }
 }
 private struct MainTabView: View {
+    @EnvironmentObject private var model: GalleryViewModel
     var body: some View {
         TabView {
-            GalleryView()
+            Group {
+                if model.canReadLibrary {
+                    GalleryView()
+                } else {
+                    PhotoPermissionView(status: model.authorizationStatus) {
+                        Task { await model.requestAccess() }
+                    }
+                }
+            }
                 .tabItem { Label("Gallery", systemImage: "photo.stack") }
             GallerySettingsView()
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }

@@ -23,6 +23,10 @@ final class PhotoLibraryService {
 
     private let imageManager = PHCachingImageManager()
 
+    func clearCachedImages() {
+        imageManager.stopCachingImagesForAllAssets()
+    }
+
     var authorizationStatus: PHAuthorizationStatus {
         PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }

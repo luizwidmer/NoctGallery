@@ -2,6 +2,45 @@ import XCTest
 @testable import NoctGallery
 
 final class TemporaryExportStoreTests: XCTestCase {
+    func testResetRejectsExportsFromPreviousSessionAndPreservesOutsideFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let outside = directory.appendingPathComponent("original.jpg")
+        try Data([9]).write(to: outside)
+        let root = directory.appendingPathComponent("exports")
+        let store = TemporaryExportStore(rootURL: root)
+        let session = await store.currentSession()
+        let image = SanitizedImage(data: Data([1]), sourceByteCount: 1, pixelWidth: 1, pixelHeight: 1,
+                                   outputUTType: "public.jpeg", fileExtension: "jpg", sha256: "test", removedMetadataKeys: [])
+        _ = try await store.write(image, session: session)
+        try await store.reset()
+        do {
+            _ = try await store.write(image, session: session)
+            XCTFail("An export started before reset recreated purged data")
+        } catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        XCTAssertEqual(try Data(contentsOf: outside), Data([9]))
+    }
+
+    @MainActor
+    func testFullResetClearsSettingsAndRestartsOnboarding() async throws {
+        let suite = "NoctGalleryResetTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "onboarding.completed")
+        defaults.set("png", forKey: "share.outputFormat")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root))
+        let originalGeneration = model.resetGeneration
+        await model.purgeAndReset(defaults: defaults, domain: suite)
+        XCTAssertNil(defaults.object(forKey: "onboarding.completed"))
+        XCTAssertNil(defaults.object(forKey: "share.outputFormat"))
+        XCTAssertNotEqual(originalGeneration, model.resetGeneration)
+        XCTAssertFalse(model.isResetting)
+        XCTAssertNil(model.errorMessage)
+    }
+
     func testExportExistsOnlyUntilExplicitCleanup() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("NoctGalleryTests-\(UUID().uuidString)", isDirectory: true)
