@@ -36,13 +36,9 @@ final class ImageSanitizerTests: XCTestCase {
     func testSyntheticExportContainsOnlyChosenGeneratedProfile() throws {
         let source = try fixtureJPEG(width: 200, height: 120, includeMetadata: true)
         let profile = SyntheticMetadataProfile(
-            id: UUID(),
-            make: "Aster Imaging",
-            model: "Field 28",
-            software: "Capture Stack 5.1",
-            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            latitude: -12.25,
-            longitude: 38.75
+            equipmentID: "x100v", scene: .shade,
+            capturedAt: Date(timeIntervalSince1970: 1_740_000_000),
+            location: DecoyLocation(name: "Selected place", latitude: -12.25, longitude: 38.75, timeZoneIdentifier: "GMT")
         )
         var configuration = ImageSanitizer.Configuration()
         configuration.outputFormat = .jpeg

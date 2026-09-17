@@ -31,7 +31,7 @@ final class TemporaryExportStoreTests: XCTestCase {
         defaults.set(true, forKey: "onboarding.completed")
         defaults.set("png", forKey: "share.outputFormat")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root))
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root), privateStore: PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys()), workStore: MediaWorkStore(root: root.appendingPathComponent("work")), defaults: defaults, lock: GalleryLockController(store: GalleryLockStore(persistence: MemoryGalleryLockPersistence())))
         let originalGeneration = model.resetGeneration
         await model.purgeAndReset(defaults: defaults, domain: suite)
         XCTAssertNil(defaults.object(forKey: "onboarding.completed"))
@@ -142,7 +142,7 @@ final class TemporaryExportStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manager = FailingCleanupFileManager()
-        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: directory, fileManager: manager))
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: directory, fileManager: manager), privateStore: PrivateMediaStore(root: directory.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys()), workStore: MediaWorkStore(root: directory.appendingPathComponent("work")), lock: GalleryLockController(store: GalleryLockStore(persistence: MemoryGalleryLockPersistence())))
         await model.start()
         XCTAssertTrue(model.hasTemporaryShareFiles)
         XCTAssertNotNil(model.errorMessage)

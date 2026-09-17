@@ -1,4 +1,5 @@
 @preconcurrency import Photos
+@preconcurrency import AVFoundation
 import UIKit
 
 @MainActor
@@ -13,9 +14,9 @@ final class PhotoLibraryService {
         var errorDescription: String? {
             switch self {
             case .accessUnavailable: "Photo library access is unavailable."
-            case .assetUnavailable: "This photo is no longer in the library."
+            case .assetUnavailable: "This media item is no longer in the library."
             case .imageUnavailable: "The original image data is unavailable."
-            case .requestCancelled: "The photo request was cancelled."
+            case .requestCancelled: "The media request was cancelled."
             case .underlying(let message): message
             }
         }
@@ -39,7 +40,7 @@ final class PhotoLibraryService {
         guard authorizationStatus == .authorized || authorizationStatus == .limited else { return [] }
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
         let result = PHAsset.fetchAssets(with: options)
         var records: [PhotoAssetRecord] = []
         records.reserveCapacity(result.count)
@@ -50,7 +51,9 @@ final class PhotoLibraryService {
                     creationDate: asset.creationDate,
                     modificationDate: asset.modificationDate,
                     pixelWidth: asset.pixelWidth,
-                    pixelHeight: asset.pixelHeight
+                    pixelHeight: asset.pixelHeight,
+                    kind: asset.mediaType == .video ? .video : .photo,
+                    duration: asset.duration
                 )
             )
         }
@@ -71,7 +74,7 @@ final class PhotoLibraryService {
                 targetSize: targetSize,
                 contentMode: .aspectFill,
                 options: options
-            ) { image, info in
+            ) { @Sendable image, info in
                 if (info?[PHImageCancelledKey] as? Bool) == true {
                     gate.fail(LibraryError.requestCancelled)
                     return
@@ -100,7 +103,7 @@ final class PhotoLibraryService {
 
         return try await withCheckedThrowingContinuation { continuation in
             let gate = ContinuationGate<Data>(continuation)
-            imageManager.requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
+            imageManager.requestImageDataAndOrientation(for: asset, options: options) { @Sendable data, _, _, info in
                 if (info?[PHImageCancelledKey] as? Bool) == true {
                     gate.fail(LibraryError.requestCancelled)
                     return
@@ -127,7 +130,26 @@ final class PhotoLibraryService {
         }
         return asset
     }
+
+    func videoAsset(for record: PhotoAssetRecord) async throws -> AVAsset {
+        let asset = try asset(for: record)
+        let options = PHVideoRequestOptions()
+        options.version = .current
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        let wrapper: VideoAssetBox = try await withCheckedThrowingContinuation { continuation in
+            let gate = ContinuationGate<VideoAssetBox>(continuation)
+            imageManager.requestAVAsset(forVideo: asset, options: options) { @Sendable video, _, info in
+                if let error = info?[PHImageErrorKey] as? Error { gate.fail(error) }
+                else if let video { gate.succeed(VideoAssetBox(value: video)) }
+                else { gate.fail(LibraryError.assetUnavailable) }
+            }
+        }
+        return wrapper.value
+    }
 }
+
+private struct VideoAssetBox: @unchecked Sendable { let value: AVAsset }
 
 private struct UncheckedImage: @unchecked Sendable {
     let value: UIImage

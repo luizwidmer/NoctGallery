@@ -10,6 +10,7 @@ struct NoctGalleryApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                .environmentObject(model.lock)
         }
     }
 }

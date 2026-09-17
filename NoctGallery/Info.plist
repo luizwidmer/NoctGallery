@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Noct Gallery</string>
+	<string>$(GALLERY_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,7 +25,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Noct Gallery reads your existing photo library so you can view images and create sanitized copies only when sharing.</string>
+	<string>Browse selected photos and videos and create private or sanitized copies. Noct Gallery never changes your Photos originals.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos and videos directly into your encrypted private gallery without saving them to Photos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record sound with private videos when you enable the microphone.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID as a required unlock method for Noct Gallery.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
@@ -51,5 +57,11 @@
 	<string>https://luizwidmer.com/</string>
 	<key>AppSupportPrivacyPolicyURL</key>
 	<string>https://luizwidmer.com/noct-gallery-privacy-policy/</string>
+	<key>NFCReaderUsageDescription</key>
+	<string>Verify your registered security key to unlock Noct Gallery.</string>
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>A0000006472F0001</string>
+	</array>
 </dict>
 </plist>

@@ -1,16 +1,32 @@
 import Foundation
 
-struct PhotoAssetRecord: Identifiable, Hashable, Sendable {
+enum GalleryMediaKind: String, Codable, CaseIterable, Sendable {
+    case photo, video
+    var title: String { self == .photo ? "Photo" : "Video" }
+}
+
+enum GallerySource: String, Codable, Sendable { case photos, privateLibrary }
+
+struct PhotoAssetRecord: Identifiable, Hashable, Codable, Sendable {
     let localIdentifier: String
     let creationDate: Date?
     let modificationDate: Date?
     let pixelWidth: Int
     let pixelHeight: Int
+    var kind: GalleryMediaKind = .photo
+    var duration: Double = 0
+    var source: GallerySource = .photos
+    var decoyProfile: SyntheticMetadataProfile? = nil
 
     var id: String { localIdentifier }
 
     var dimensionsLabel: String {
         "\(pixelWidth) × \(pixelHeight)"
+    }
+
+    var durationLabel: String {
+        let seconds = duration.isFinite ? max(0, Int(duration)) : 0
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     var dateLabel: String {
@@ -44,16 +60,6 @@ struct SanitizedImage: Sendable {
     let fileExtension: String
     let sha256: String
     let removedMetadataKeys: [String]
-}
-
-struct SyntheticMetadataProfile: Identifiable, Hashable, Sendable {
-    let id: UUID
-    let make: String
-    let model: String
-    let software: String
-    let capturedAt: Date
-    let latitude: Double
-    let longitude: Double
 }
 
 struct SharePayload: Identifiable, Sendable {

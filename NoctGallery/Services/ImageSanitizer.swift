@@ -59,6 +59,7 @@ struct ImageSanitizer: Sendable {
         syntheticMetadata: SyntheticMetadataProfile? = nil
     ) throws -> SanitizedImage {
         let configuration = try configuration.validated()
+        if let syntheticMetadata { _ = try syntheticMetadata.validated() }
         guard !sourceData.isEmpty else { throw SanitizationError.emptyInput }
         guard sourceData.count <= configuration.maximumEncodedBytes else {
             throw SanitizationError.encodedInputTooLarge(limit: configuration.maximumEncodedBytes)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GallerySettingsView: View {
     @EnvironmentObject private var model: GalleryViewModel
+    @EnvironmentObject private var lock: GalleryLockController
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("share.outputFormat") private var outputFormat = GalleryOutputFormat.heic.rawValue
@@ -13,7 +14,25 @@ struct GallerySettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Sanitized shares") {
+                Section("Security") {
+                    Button { lock.requestProtectionSettings() } label: {
+                        LabeledContent { Text(lock.mode.title).foregroundStyle(.secondary) } label: {
+                            Label("App Protection", systemImage: "lock.shield")
+                        }
+                    }
+                    if lock.mode != .off {
+                        Button("Lock Now", systemImage: "lock") { Task { await model.lockPrivate() } }
+                    }
+                }
+                Section("Private camera") {
+                    NavigationLink { CameraMetadataSettingsView() } label: {
+                        Label("Camera Metadata", systemImage: "camera.filters")
+                    }
+                    LabeledContent("Capture mode", value: model.cameraMetadataMode.title)
+                    Text("Private captures are encrypted on this device and excluded from backups. They are never automatically added to Photos.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Photo shares") {
                     Picker("Output format", selection: $outputFormat) {
                         ForEach(GalleryOutputFormat.allCases) { format in
                             Text(format.title).tag(format.rawValue)
@@ -39,7 +58,7 @@ struct GallerySettingsView: View {
 
                 Section("Privacy & storage") {
                     DisclosureGroup("How sharing works") {
-                        Text("Noct Gallery reads the selected original on demand, rebuilds a bounded image from decoded pixels, and hands the share sheet a protected temporary file. Apple Photos remains the source of truth.")
+                        Text("Photos and videos are decoded and rebuilt into protected temporary copies for sharing. Video exports use H.264 and AAC, up to 1080p at 30 fps. Originals in Photos are never modified.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -69,7 +88,7 @@ struct GallerySettingsView: View {
                     }
                     .disabled(model.isResetting)
                     .accessibilityIdentifier("app.purgeAndReset")
-                    Text("Remove temporary share files, cached previews, and all app settings, then start onboarding again. Your Photos originals and copies already shared remain unchanged.")
+                    Text("Permanently delete the private gallery and its encryption key, temporary files, presets, and settings. Your Photos originals and copies already shared remain unchanged.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -78,7 +97,7 @@ struct GallerySettingsView: View {
 
                 Section("About") {
                     LabeledContent("Version", value: "0.1.0")
-                    Text("Noct Gallery contains no analytics, tracking SDK, advertising SDK, or application network client. PhotoKit may access iCloud when an original is not stored locally.")
+                    Text("No analytics, advertising or tracking. PhotoKit may download iCloud media. Place searches and map tiles use Apple Maps; the app never requests your current GPS location.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -96,7 +115,7 @@ struct GallerySettingsView: View {
                 }
                 .disabled(resetConfirmation != "RESET")
             } message: {
-                Text("This deletes this app’s temporary files and settings. It cannot be undone. Your Photos library is not deleted.")
+                Text("This permanently deletes your private photos and videos, their encryption key, temporary files, presets and settings. It cannot be undone. Your Photos library is not deleted.")
             }
         }
     }

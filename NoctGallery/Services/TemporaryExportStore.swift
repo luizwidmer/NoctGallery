@@ -46,6 +46,17 @@ actor TemporaryExportStore {
         }
     }
 
+    func adoptVideo(_ source: URL, session expected: UUID) throws -> URL {
+        guard expected == sessionID else { throw CancellationError() }
+        try prepareDirectory()
+        let url = rootURL.appendingPathComponent("shared-\(UUID().uuidString.lowercased()).mov")
+        do {
+            try fileManager.moveItem(at: source, to: url)
+            try applyProtection(to: url, permissions: 0o600)
+            return url
+        } catch { try? fileManager.removeItem(at: url); throw error }
+    }
+
     func purgeAll() throws {
         if fileManager.fileExists(atPath: rootURL.path) {
             try fileManager.removeItem(at: rootURL)

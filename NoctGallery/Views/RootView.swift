@@ -3,7 +3,9 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: GalleryViewModel
+    @EnvironmentObject private var lock: GalleryLockController
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("onboarding.completed") private var completedOnboarding = false
 
     var body: some View {
@@ -11,17 +13,42 @@ struct RootView: View {
             NoctGalleryTheme.background(for: colorScheme)
                 .ignoresSafeArea()
 
-            if !completedOnboarding {
+            if !lock.isLoaded || lock.loadFailed || lock.pendingDuress != nil || model.isResetting || model.resetNeedsRetry {
+                GalleryLockView()
+            } else if lock.configuration == nil {
+                NavigationStack { GalleryProtectionView(onboarding: true) }
+            } else if !lock.isUnlocked {
+                GalleryLockView()
+            } else if !completedOnboarding {
                 OnboardingView {
                     completedOnboarding = true
-                    Task { await model.requestAccess() }
                 }
             } else {
                 MainTabView()
             }
+            if scenePhase != .active {
+                NoctGalleryTheme.background(for: colorScheme).ignoresSafeArea()
+                NoctGalleryMark()
+            }
         }
         .id(model.resetGeneration)
-        .task(id: model.resetGeneration) { await model.start() }
+        .task(id: model.resetGeneration) {
+            await model.start()
+            if lock.isUnlocked { _ = await model.unlockPrivate() }
+        }
+        .task(id: lock.pendingDuress?.id) {
+            if let plan = lock.pendingDuress { await model.applyDuress(plan) }
+        }
+        .onChange(of: lock.isUnlocked) { _, unlocked in
+            Task { if unlocked { _ = await model.unlockPrivate() } else { await model.lockPrivate(lockApp: false) } }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { lock.lock(); Task { await model.lockPrivate(lockApp: false) } }
+            if phase == .active { lock.activate() }
+        }
+        .sheet(isPresented: $lock.showsProtectionSettings) {
+            NavigationStack { GalleryProtectionView() }
+        }
         .sheet(item: $model.sharePayload, onDismiss: model.finishShare) { payload in
             ShareSheet(url: payload.url, completion: model.finishShare)
                 .presentationDetents([.medium, .large])
@@ -42,8 +69,9 @@ struct RootView: View {
 }
 private struct MainTabView: View {
     @EnvironmentObject private var model: GalleryViewModel
+    @State private var selection = 1
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             Group {
                 if model.canReadLibrary {
                     GalleryView()
@@ -53,9 +81,11 @@ private struct MainTabView: View {
                     }
                 }
             }
-                .tabItem { Label("Gallery", systemImage: "photo.stack") }
+                .tabItem { Label("Photos", systemImage: "photo.stack") }.tag(0)
+            PrivateGalleryView()
+                .tabItem { Label("Private", systemImage: "lock.rectangle.stack") }.tag(1)
             GallerySettingsView()
-                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }.tag(2)
         }
         .tint(NoctGalleryTheme.accent)
     }
@@ -73,7 +103,7 @@ private struct OnboardingView: View {
                 VStack(spacing: 10) {
                     Text("Noct Gallery")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
-                    Text("Your photos stay where they are.")
+                    Text("A private space. A cleaner share.")
                         .font(.title3.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
@@ -81,30 +111,30 @@ private struct OnboardingView: View {
                 VStack(spacing: 14) {
                     OnboardingPoint(
                         icon: "photo.stack",
-                        title: "No second library",
-                        detail: "Noct Gallery reads the system photo library and keeps no private media copy."
+                        title: "Photos and videos, together",
+                        detail: "Browse selected media in Photos or keep encrypted copies in your private gallery."
                     )
                     OnboardingPoint(
                         icon: "wand.and.sparkles",
-                        title: "Clean only when sharing",
-                        detail: "Removes hidden metadata and creates a fresh share copy. Your original stays in Photos."
+                        title: "Your own private camera",
+                        detail: "Capture directly into Noct Gallery without saving to Photos. Your chosen unlock methods protect the whole app."
                     )
                     OnboardingPoint(
                         icon: "theatermasks",
                         title: "Optional decoy metadata",
-                        detail: "Generated metadata is explicit, temporary, and never written back to Photos."
+                        detail: "Use documented equipment, saved presets, and places you choose on a map. Photos originals stay unchanged."
                     )
                 }
 
                 Button(action: continueAction) {
-                    Text("Choose Photos to Share")
+                    Text("Finish Onboarding")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(NoctGalleryTheme.accent)
 
-                Text("Photo access lets you browse your library. Noct Gallery does not modify or upload your originals.")
+                Text("Photos access is optional. Camera and microphone permissions are requested only when needed.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -150,9 +180,9 @@ private struct PhotoPermissionView: View {
         ContentUnavailableView {
             Label("Photo Access Needed", systemImage: "photo.badge.exclamationmark")
         } description: {
-            Text("Allow photo access to browse your existing library and choose an image to share.")
+            Text("Allow access to browse existing photos and videos. You can use the Private tab and its camera without Photos access.")
         } actions: {
-            if status == .notDetermined {
+            if status == .notDetermined || status == .authorized || status == .limited {
                 Button("Allow Photo Access", action: request)
                     .buttonStyle(.borderedProminent)
             } else {

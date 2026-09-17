@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F10000000000000000000001 /* NoctweaveSecurityKeys in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000003; };
 		100000000000000000000001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
@@ -31,6 +32,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				NoctGallery.entitlements,
 			);
 			target = 500000000000000000000001 /* NoctGallery */;
 		};
@@ -57,6 +59,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10000000000000000000001 /* NoctweaveSecurityKeys in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -107,6 +110,7 @@
 			fileSystemSynchronizedGroups = (
 				600000000000000000000001 /* NoctGallery */,
 			);
+			packageProductDependencies = (F10000000000000000000003);
 			name = NoctGallery;
 			productName = NoctGallery;
 			productReference = 200000000000000000000001 /* NoctGallery.app */;
@@ -163,6 +167,7 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 800000000000000000000002 /* Products */;
+			packageReferences = (F10000000000000000000002);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -213,6 +218,13 @@
 			targetProxy = 300000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		F10000000000000000000002 = {isa = XCLocalSwiftPackageReference; relativePath = "../PICCP Project/NoctweaveSecurityKeys"; };
+/* End XCLocalSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		F10000000000000000000003 = {isa = XCSwiftPackageProductDependency; productName = NoctweaveSecurityKeys; };
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		D00000000000000000000001 /* Debug */ = {
@@ -338,6 +350,8 @@
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NoctGallery/Info.plist;
+				GALLERY_DISPLAY_NAME = "Noct Gallery";
+				CODE_SIGN_ENTITLEMENTS = NoctGallery/NoctGallery.entitlements;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.luizwidmer.NoctGallery;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -361,6 +375,8 @@
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NoctGallery/Info.plist;
+				GALLERY_DISPLAY_NAME = "Noct Gallery";
+				CODE_SIGN_ENTITLEMENTS = NoctGallery/NoctGallery.entitlements;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.luizwidmer.NoctGallery;
 				PRODUCT_NAME = "$(TARGET_NAME)";
