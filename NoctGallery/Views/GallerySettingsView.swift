@@ -96,7 +96,7 @@ struct GallerySettingsView: View {
                 Section { AppSupportCard().listRowInsets(EdgeInsets()) }
 
                 Section("About") {
-                    LabeledContent("Version", value: "0.1.0")
+                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
                     Text("No analytics, advertising or tracking. PhotoKit may download iCloud media. Place searches and map tiles use Apple Maps; the app never requests your current GPS location.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

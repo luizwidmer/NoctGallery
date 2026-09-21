@@ -1,21 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-  <title id="title">Noct Gallery app icon</title>
-  <desc id="desc">A sanitized photo card and clean sparkle in the Noctweave palette.</desc>
-  <defs>
-    <linearGradient id="surface" x1="96" y1="72" x2="928" y2="952" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#2D1C23"/>
-      <stop offset="1" stop-color="#120B0F"/>
-    </linearGradient>
-    <linearGradient id="landscape" x1="270" y1="610" x2="742" y2="790" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#922D35"/>
-      <stop offset="1" stop-color="#C96A61"/>
-    </linearGradient>
-  </defs>
-  <rect width="1024" height="1024" fill="url(#surface)"/>
-  <rect x="214" y="252" width="540" height="500" rx="84" fill="#1B1217" stroke="#EBC7AF" stroke-width="28"/>
-  <rect x="274" y="192" width="536" height="500" rx="84" fill="#2A1B21" stroke="#FAF3EA" stroke-width="28"/>
-  <circle cx="650" cy="340" r="54" fill="#EBC7AF"/>
-  <path d="M302 626L438 474L536 574L606 506L782 674V664C782 694 758 718 728 718H328C298 718 274 694 274 664V650Z" fill="url(#landscape)"/>
-  <path d="M786 148L804 192L848 210L804 228L786 272L768 228L724 210L768 192Z" fill="#FAF3EA"/>
-  <circle cx="786" cy="210" r="17" fill="#C96A61"/>
+<title id="title">Noct Gallery</title><desc id="desc">Two softly layered photo frames hold a moonlit coral landscape on deep plum.</desc>
+<defs>
+<linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#38212C"/><stop offset="1" stop-color="#140D17"/></linearGradient>
+<radialGradient id="glow" cx=".46" cy=".33" r=".7"><stop stop-color="#B45C65" stop-opacity=".19"/><stop offset="1" stop-color="#B45C65" stop-opacity="0"/></radialGradient>
+<linearGradient id="back" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#D69B91"/><stop offset="1" stop-color="#7C454F"/></linearGradient>
+<linearGradient id="frame" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FFF4E6"/><stop offset=".52" stop-color="#F3D9C5"/><stop offset="1" stop-color="#D8ADA2"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#35202D"/><stop offset="1" stop-color="#69404B"/></linearGradient>
+<linearGradient id="ridge" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E5A494"/><stop offset="1" stop-color="#BA6265"/></linearGradient>
+<linearGradient id="foreground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#BA5E64"/><stop offset="1" stop-color="#753746"/></linearGradient>
+<clipPath id="picture"><rect x="306" y="246" width="440" height="464" rx="54"/></clipPath>
+<filter id="shadow" x="-.4" y="-.4" width="1.8" height="1.8"><feDropShadow dx="0" dy="28" stdDeviation="30" flood-color="#08050B" flood-opacity=".48"/></filter>
+</defs>
+<rect width="1024" height="1024" fill="url(#background)"/><rect width="1024" height="1024" fill="url(#glow)"/>
+<g transform="rotate(-9 490 546)"><rect x="215" y="289" width="530" height="518" rx="82" fill="#0D0911" opacity=".28"/><rect x="215" y="271" width="530" height="518" rx="82" fill="url(#back)"/><rect x="237" y="293" width="486" height="474" rx="62" fill="#422832"/></g>
+<g filter="url(#shadow)"><rect x="270" y="210" width="512" height="536" rx="90" fill="url(#frame)"/>
+<g clip-path="url(#picture)"><rect x="306" y="246" width="440" height="464" fill="url(#sky)"/><circle cx="630" cy="366" r="49" fill="#F3CFB0"/>
+<path d="M276 633L438 425Q448 413 459 427L636 652V746H276Z" fill="url(#ridge)"/><path d="M432 724L609 504Q621 489 635 505L790 689V746H432Z" fill="url(#foreground)"/><path d="M302 696Q421 630 542 692T764 672V746H302Z" fill="#603342" opacity=".55"/></g>
+<rect x="306" y="246" width="440" height="464" rx="54" fill="none" stroke="#FFFFFF" stroke-opacity=".11" stroke-width="2"/></g>
 </svg>
