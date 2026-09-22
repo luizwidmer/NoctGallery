@@ -111,30 +111,30 @@ private struct OnboardingView: View {
                 VStack(spacing: 14) {
                     OnboardingPoint(
                         icon: "photo.stack",
-                        title: "Photos and videos, together",
-                        detail: "Browse selected media in Photos or keep encrypted copies in your private gallery."
+                        title: "Your private gallery",
+                        detail: "Keep photos and videos encrypted on your device."
                     )
                     OnboardingPoint(
                         icon: "wand.and.sparkles",
-                        title: "Your own private camera",
-                        detail: "Capture directly into Noct Gallery without saving to Photos. Your chosen unlock methods protect the whole app."
+                        title: "Private camera",
+                        detail: "Capture directly into Gallery, without saving to Photos."
                     )
                     OnboardingPoint(
                         icon: "theatermasks",
                         title: "Optional decoy metadata",
-                        detail: "Use documented equipment, saved presets, and places you choose on a map. Photos originals stay unchanged."
+                        detail: "Choose camera details, dates and places for copies you share."
                     )
                 }
 
                 Button(action: continueAction) {
-                    Text("Finish Onboarding")
+                    Text("Get Started")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(NoctGalleryTheme.accent)
 
-                Text("Photos access is optional. Camera and microphone permissions are requested only when needed.")
+                Text("Photos access is optional. Camera permissions are requested when needed.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -180,7 +180,7 @@ private struct PhotoPermissionView: View {
         ContentUnavailableView {
             Label("Photo Access Needed", systemImage: "photo.badge.exclamationmark")
         } description: {
-            Text("Allow access to browse existing photos and videos. You can use the Private tab and its camera without Photos access.")
+            Text("Allow access to browse Photos. The private gallery and camera work without it.")
         } actions: {
             if status == .notDetermined || status == .authorized || status == .limited {
                 Button("Allow Photo Access", action: request)

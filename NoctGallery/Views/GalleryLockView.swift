@@ -17,7 +17,7 @@ struct GalleryLockView: View {
             VStack(spacing: 26) {
                 NoctGalleryMark()
                     .contentShape(Rectangle())
-                    .onLongPressGesture(minimumDuration: 2) {
+                    .onLongPressGesture(minimumDuration: 6) {
                         guard lock.isDiscreet, !lock.isBusy else { return }
                         normalUnlockRequested = true
                         automaticBiometricAttempted = false
@@ -106,7 +106,7 @@ struct GalleryLockView: View {
             Button("Cancel", role: .cancel) {}
             Button("Purge and Reset", role: .destructive) { Task { await model.purgeAndReset() } }.disabled(resetText != "RESET")
         } message: {
-            Text("Permanently delete all private media, encryption keys, protection settings and temporary files. This cannot be undone. Originals in Apple Photos stay unchanged.")
+            Text("Permanently erase all Gallery media, keys and settings? This cannot be undone. Photos is unaffected.")
         }
     }
     private func beginAutomaticBiometrics() {
@@ -200,7 +200,7 @@ struct GalleryProtectionView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
                         Label("Protect your private space", systemImage: "lock.shield").font(.title2.bold())
-                        Text("Choose how you unlock Noct Gallery before adding photos or videos.").foregroundStyle(.secondary)
+                        Text("Choose your unlock method.").foregroundStyle(.secondary)
                     }.padding(.vertical, 12)
                 }
             }
@@ -212,10 +212,10 @@ struct GalleryProtectionView: View {
                     }
                 }
                 if mode != .off {
-                    Text("Every selected method is required. Gallery locks when it enters the background; you can also lock it manually.")
+                    Text("Every selected method is required. Gallery locks when you leave the app.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Text("Anyone using your unlocked device can open Gallery. Private media still uses encrypted storage.")
+                    Text("Anyone using this device can open Gallery. Stored media remains encrypted.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } header: { Text("App protection") }
@@ -225,7 +225,7 @@ struct GalleryProtectionView: View {
                         .accessibilityIdentifier("protection.newPIN")
                     GalleryPINField(title: "Confirm PIN", text: $confirmation)
                         .accessibilityIdentifier("protection.confirmPIN")
-                    Text("This is your Gallery PIN, separate from your device passcode.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Use a separate PIN from your device passcode.").font(.footnote).foregroundStyle(.secondary)
                 }
             }
             if mode.factors.contains(.biometrics) {
@@ -246,7 +246,7 @@ struct GalleryProtectionView: View {
                     if lock.hasLegacyKeys {
                         SecureField("Earlier registration’s FIDO2 PIN", text: $keyPIN).textContentType(.none).autocorrectionDisabled()
                         Button("Verify Earlier Registration") { verify(register: false, useLegacy: true) }
-                        Text("Earlier registrations retain their original USB smart-card connection. Register the key again below to use the local FIDO2 flow with broader key support.")
+                        Text("Earlier keys use the original connection method. Re-register for broader USB support.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if !(lock.configuration?.keys.isEmpty ?? true) {
@@ -257,7 +257,7 @@ struct GalleryProtectionView: View {
                     Button("Register Another Key") { verify(register: true) }
                         .disabled((lock.configuration?.keys.count ?? 0) >= 8)
                     if let key = lock.verifiedKey { Label("Verified: \(key.name)", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
-                    Text("Connect a FIDO2 security key with PIN or built-in user verification. Authentication stays on this device, with no account or internet connection needed. iOS handles the key PIN and touch prompts. Registration includes a second verification before protection can be saved. Gallery does not scan NFC tags; iOS controls the connection options in its own sheet.")
+                    Text("Connect a FIDO2 key. Follow the PIN and touch prompts, then verify it before saving. Works offline.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.disabled(lock.isBusy || !lock.securityKeysAvailable)
             }
@@ -271,9 +271,12 @@ struct GalleryProtectionView: View {
                     Toggle("Show only the PIN screen", isOn: $discreet)
                         .disabled(!lock.hasDuress || mode == .off)
                         .accessibilityIdentifier("protection.discreet")
+                    Text("To unlock, press and hold the Gallery logo for 6 seconds.")
+                        .font(.footnote.weight(.semibold))
+                        .accessibilityIdentifier("protection.discreet.instructions")
                     Text(lock.hasDuress
-                         ? "The lock screen shows no biometric or key controls and does not start biometrics automatically. Press and hold the Gallery logo for two seconds to start your normal unlock checks. Your duress PIN works directly in the visible PIN field."
-                         : "Set a duress PIN first. It gives the visible PIN screen a usable unlock action when your ordinary method is biometrics or a key.")
+                         ? "Only the PIN field is shown. Your duress PIN works immediately; hidden checks start only when you hold the logo."
+                         : "Set a duress PIN first so the visible PIN field can unlock the app.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -306,14 +309,14 @@ struct GalleryProtectionView: View {
         .onDisappear { pin = ""; confirmation = ""; keyPIN = "" }
     }
     private var saveRequirement: String? {
-        if lock.isBusy { return "Finish the current verification before saving." }
+        if lock.isBusy { return "Finish verification to save." }
         if mode.factors.contains(.pin) {
             let keepingPIN = pin.isEmpty && confirmation.isEmpty && lock.configuration?.pin != nil
             if !keepingPIN {
                 if !GalleryPINVerifier.isValid(pin) {
                     return lock.configuration?.pin == nil
                         ? "Enter and confirm a six-digit Gallery PIN."
-                        : "Enter and confirm a new six-digit Gallery PIN, or leave both fields empty to keep your current PIN."
+                        : "Enter a new six-digit PIN, or leave both fields empty to keep yours."
                 }
                 if pin != confirmation { return "The new Gallery PIN and its confirmation must match." }
             }
@@ -322,7 +325,7 @@ struct GalleryProtectionView: View {
             return "Set up \(lock.biometricName) in Settings before saving this unlock combination."
         }
         if mode.factors.contains(.securityKey), lock.verifiedKey == nil {
-            return "Register a key and finish its verification, or verify an already registered key, before saving."
+            return "Verify a registered key to save protection."
         }
         return nil
     }

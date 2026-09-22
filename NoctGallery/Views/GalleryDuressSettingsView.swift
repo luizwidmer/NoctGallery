@@ -14,8 +14,8 @@ struct GalleryDuressSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("A duress PIN runs its action immediately from the lock screen, even before a security key or biometric check. Afterward, that PIN becomes the only unlock method.")
-                Text("Actions permanently affect Gallery’s private storage. They cannot erase copies already shared, device snapshots, or originals in Apple Photos.")
+                Text("A duress PIN acts immediately, before other checks, and becomes your only unlock method.")
+                Text("Actions permanently affect Gallery only. Photos, snapshots and shared copies remain.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if let active = lock.configuration?.duress, !active.isEmpty {
@@ -39,7 +39,7 @@ struct GalleryDuressSettingsView: View {
                 if selection != (lock.configuration?.decoyIDs ?? []) {
                     Button("Save Decoy Selection") { Task { await lock.setDecoys(selection) } }
                 }
-                Text("Keep real private items as decoys. They remain fully usable after the action. Every unselected private item is removed and the storage encryption key is replaced.")
+                Text("Selected items stay usable with a new encryption key. Everything else is erased.")
                     .font(.footnote).foregroundStyle(.secondary)
             } header: { Text("Retained media") }
             Section("Set a duress PIN") {
@@ -74,7 +74,7 @@ struct GalleryDuressSettingsView: View {
                 }
             }
         } message: {
-            Text("Entering this PIN on the lock screen will permanently remove \(action == .reset ? "all private media" : "every unselected private item") without another confirmation. It will replace your normal PIN, biometrics and key requirements. Saving this setting does not run it.")
+            Text("This PIN immediately erases \(action == .reset ? "all private media" : "every unselected private item") and replaces every unlock method. Saving this setting does not run it.")
         }
     }
 }

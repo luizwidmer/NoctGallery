@@ -47,7 +47,7 @@ struct GalleryView: View {
                 } else {
                     ScrollView {
                         if source == .photos && model.authorizationStatus == .limited {
-                            Label("Showing your selected photos and videos", systemImage: "photo.badge.checkmark")
+                            Label("Selected photos and videos", systemImage: "photo.badge.checkmark")
                                 .font(.footnote).foregroundStyle(.secondary).padding(.bottom, 8)
                         }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 220), spacing: 8)], spacing: 8) {
@@ -103,7 +103,7 @@ struct PrivateGalleryView: View {
                     ContentUnavailableView {
                         Label("Private Gallery", systemImage: "lock.rectangle.stack")
                     } description: {
-                        Text("An encrypted space for your photos and videos. Captures stay inside Noct Gallery and are excluded from backups.")
+                        Text("Encrypted photos and videos, kept on this device and excluded from backups.")
                     } actions: {
                         Button { Task { await model.unlockPrivate() } } label: {
                             if model.isUnlocking { ProgressView() }

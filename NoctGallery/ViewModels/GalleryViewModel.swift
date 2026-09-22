@@ -400,6 +400,60 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 
+    func moveToPrivate(asset: PhotoAssetRecord, savedCopyID: String? = nil) async -> PrivateGalleryMove.Result? {
+        guard asset.source == .photos, !isResetting, !isProcessing, await unlockPrivate() else { return nil }
+        let generation = operationGeneration
+        exportingAssetID = asset.id
+        processingMessage = "Saving the original privately…"
+        defer { if generation == operationGeneration { exportingAssetID = nil; processingMessage = nil; conversion = nil } }
+        var source: URL?
+        do {
+            let session = try await privateStore.currentSession()
+            let workSession = await workStore.currentSession()
+            let transfer = Task { try await library.originalFile(for: asset, workStore: workStore, session: workSession) }
+            conversion = transfer
+            let media = try await transfer.value
+            source = media.url
+            guard generation == operationGeneration, lock.isUnlocked else { throw CancellationError() }
+            let result = try await PrivateGalleryMove.perform(save: {
+                if let savedCopyID {
+                    guard let existing = try await self.privateStore.list().first(where: { $0.id == savedCopyID }) else {
+                        throw PrivateMediaStore.StoreError.invalidRecord
+                    }
+                    return existing
+                }
+                return try await self.keep(media, profile: nil, session: session)
+            }, verify: { saved in
+                self.processingMessage = "Checking the saved original…"
+                try await self.privateStore.verifySavedCopy(id: saved.id, original: media.url, session: session)
+            }, mayDelete: {
+                generation == self.operationGeneration && self.privateUnlocked && self.lock.isUnlocked && !self.isResetting
+            }, deleteOriginal: {
+                self.processingMessage = "Confirm removal in Photos…"
+                try await self.library.deleteOriginal(asset)
+            })
+            try? await workStore.remove(media.url)
+            if generation == operationGeneration {
+                privateAssets = try await privateStore.list()
+                if result.originalRemoved {
+                    assets.removeAll { $0.id == asset.id }
+                } else if let error = result.error {
+                    let nsError = error as NSError
+                    if error is CancellationError || (nsError.domain == PHPhotosErrorDomain && nsError.code == PHPhotosError.Code.userCancelled.rawValue) {
+                        errorMessage = "The private copy is saved. The Photos original was kept."
+                    } else {
+                        errorMessage = "The Photos original was kept. \(error.localizedDescription)"
+                    }
+                }
+            }
+            return result
+        } catch {
+            if let source { try? await workStore.remove(source) }
+            if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription }
+            return nil
+        }
+    }
+
     func saveCapture(photo: Data?, video: URL?, profile: SyntheticMetadataProfile?) async throws {
         guard privateUnlocked, !isProcessing, !isResetting else { throw PrivateMediaStore.StoreError.locked }
         let generation = operationGeneration

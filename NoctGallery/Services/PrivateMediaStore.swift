@@ -127,7 +127,7 @@ actor PrivateMediaStore {
     func save(file: URL, fileExtension: String, kind: GalleryMediaKind, width: Int, height: Int,
               duration: Double, thumbnail: Data, profile: SyntheticMetadataProfile?, session expected: UUID) throws -> PhotoAssetRecord {
         try requireSession(expected)
-        guard ["jpg", "heic", "png", "mov"].contains(fileExtension),
+        guard ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(fileExtension),
               width > 0, height > 0, duration.isFinite, duration >= 0, thumbnail.count <= 4_194_304 else { throw StoreError.invalidRecord }
         if let profile { _ = try profile.validated() }
         let attributes = try manager.attributesOfItem(atPath: file.path)
@@ -197,6 +197,32 @@ actor PrivateMediaStore {
     }
 
     func fileExtension(id: String) throws -> String { try record(id: id).fileExtension }
+
+    /// Authenticate every saved byte and compare it with the imported original
+    /// before Photos deletion. This check creates no plaintext output file.
+    func verifySavedCopy(id: String, original: URL, session expected: UUID) throws {
+        try requireSession(expected)
+        let record = try record(id: id)
+        _ = try thumbnail(id: id)
+        let source = try FileHandle(forReadingFrom: original)
+        defer { try? source.close() }
+        let encrypted = try FileHandle(forReadingFrom: itemDirectory(id).appendingPathComponent("media.sealed"))
+        defer { try? encrypted.close() }
+        let key = try itemKey(id)
+        var remaining = record.byteCount
+        for index in 0..<record.chunkCount {
+            try Task.checkCancellation()
+            let count = min(Self.chunkSize, remaining)
+            let sealed = try encrypted.read(upToCount: count + 28) ?? Data()
+            guard sealed.count == count + 28 else { throw StoreError.invalidRecord }
+            let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key,
+                                        authenticating: aad(id, index, record.byteCount))
+            guard plain.count == count, plain == (try source.read(upToCount: count)) else { throw StoreError.invalidRecord }
+            remaining -= count
+        }
+        guard remaining == 0, try source.read(upToCount: 1)?.isEmpty != false,
+              try encrypted.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
+    }
 
     func delete(id: String) throws {
         _ = try record(id: id)
@@ -318,7 +344,7 @@ actor PrivateMediaStore {
         guard record.version == 1, record.asset.id == id, record.asset.source == .privateLibrary,
               (1...Self.maximumBytes).contains(record.byteCount),
               record.chunkCount == (record.byteCount + Self.chunkSize - 1) / Self.chunkSize,
-              ["jpg", "heic", "png", "mov"].contains(record.fileExtension) else { throw StoreError.invalidRecord }
+              ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(record.fileExtension) else { throw StoreError.invalidRecord }
         return record
     }
 
@@ -369,7 +395,7 @@ actor MediaWorkStore {
     func currentSession() -> UUID { session }
     func allocate(extension suffix: String, session expected: UUID) throws -> URL {
         guard session == expected else { throw CancellationError() }
-        guard ["jpg", "heic", "png", "mov"].contains(suffix) else { throw PrivateMediaStore.StoreError.invalidRecord }
+        guard ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(suffix) else { throw PrivateMediaStore.StoreError.invalidRecord }
         try MediaFileProtection.prepareDirectory(root)
         return root.appendingPathComponent(UUID().uuidString.lowercased() + "." + suffix)
     }

@@ -29,7 +29,7 @@ struct GallerySettingsView: View {
                         Label("Camera Metadata", systemImage: "camera.filters")
                     }
                     LabeledContent("Capture mode", value: model.cameraMetadataMode.title)
-                    Text("Private captures are encrypted on this device and excluded from backups. They are never automatically added to Photos.")
+                    Text("Captures stay encrypted in Gallery, outside Photos and backups.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Photo shares") {
@@ -50,7 +50,7 @@ struct GallerySettingsView: View {
                                 Slider(value: $lossyQuality, in: 0.65 ... 1.0, step: 0.01)
                             }
                         }
-                        Text("HEIC falls back to JPEG only when this device cannot encode HEIC.")
+                        Text("JPEG is used if HEIC encoding is unavailable.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -58,7 +58,7 @@ struct GallerySettingsView: View {
 
                 Section("Privacy & storage") {
                     DisclosureGroup("How sharing works") {
-                        Text("Photos and videos are decoded and rebuilt into protected temporary copies for sharing. Video exports use H.264 and AAC, up to 1080p at 30 fps. Originals in Photos are never modified.")
+                        Text("Sharing creates clean copies; originals stay unchanged. Video shares use H.264/AAC, up to 1080p at 30 fps.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -67,7 +67,7 @@ struct GallerySettingsView: View {
                             Task { await model.purgeTemporaryExports() }
                         }
                     }
-                    Text("Temporary files use complete file protection, are excluded from backup, and are removed after the share sheet closes.")
+                    Text("Share files are protected, excluded from backups and removed after sharing.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -88,7 +88,7 @@ struct GallerySettingsView: View {
                     }
                     .disabled(model.isResetting)
                     .accessibilityIdentifier("app.purgeAndReset")
-                    Text("Permanently delete the private gallery and its encryption key, temporary files, presets, and settings. Your Photos originals and copies already shared remain unchanged.")
+                    Text("Erase all Gallery data and settings. Photos and shared copies are unaffected.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -97,7 +97,7 @@ struct GallerySettingsView: View {
 
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
-                    Text("No analytics, advertising or tracking. PhotoKit may download iCloud media. Place searches and map tiles use Apple Maps; the app never requests your current GPS location.")
+                    Text("No ads, analytics or tracking. Photos may download iCloud media. Maps uses Apple services without requesting your location.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -115,7 +115,7 @@ struct GallerySettingsView: View {
                 }
                 .disabled(resetConfirmation != "RESET")
             } message: {
-                Text("This permanently deletes your private photos and videos, their encryption key, temporary files, presets and settings. It cannot be undone. Your Photos library is not deleted.")
+                Text("Permanently erase private media, keys, temporary files and settings? This cannot be undone. Photos is unaffected.")
             }
         }
     }

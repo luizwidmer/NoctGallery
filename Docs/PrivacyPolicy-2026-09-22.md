@@ -1,4 +1,4 @@
-<!-- Published and verified at https://luizwidmer.com/noct-gallery-privacy-policy/ on September 22, 2026. -->
+<!-- Updated for version 0.2.1 and published and verified at https://luizwidmer.com/noct-gallery-privacy-policy/ on September 22, 2026. -->
 
 # Noct Gallery Privacy Policy
 
@@ -8,7 +8,7 @@ Noct Gallery stores and processes photos and videos on your device. It has no ap
 
 ## Media and permissions
 
-Photos access is optional and lets you browse and import selected photos and videos. Apple may download iCloud-backed originals when you open or process them. Gallery does not modify or delete the originals in Apple Photos.
+Photos access is optional and lets you browse and import selected photos and videos. Apple may download iCloud-backed originals when you open or process them. Sharing and copying leave Photos originals unchanged. In version 0.2.1 and later, choosing Move to Private Gallery preserves and verifies an encrypted original before asking Photos to delete its copy. Deletion can sync through iCloud Photos. Photos retains deleted items in Recently Deleted for up to 30 days unless you remove them there. Unsupported or multipart items remain in Photos.
 
 The private camera uses Apple's camera hardware with your permission and saves only inside Noct Gallery. Microphone permission is requested only when you choose to record sound. The app does not request your current location. Map tiles and explicit place searches use Apple Maps; Apple receives the map/search requests under its own policies. Chosen coordinates are optional metadata, not a measurement of your location.
 

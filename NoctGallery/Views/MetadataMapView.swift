@@ -81,10 +81,10 @@ struct MetadataMapView: View {
                         coordinateField("Longitude", text: $longitude)
                         Button("Set") { setCoordinates() }.buttonStyle(.bordered)
                     }
-                    Text("Tap to move the pin. Search and map tiles use Apple Maps. Your current location is never requested.")
+                    Text("Tap to place the pin. Uses Apple Maps, without requesting your location.")
                         .font(.caption).foregroundStyle(.secondary)
                     if location.timeZoneIdentifier == "GMT" {
-                        Text("Dropped pins use UTC timestamps. Choose a search result to use its local time zone.")
+                        Text("Pins use UTC. Search results use local time.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let searchError { Text(searchError).font(.caption).foregroundStyle(.red) }

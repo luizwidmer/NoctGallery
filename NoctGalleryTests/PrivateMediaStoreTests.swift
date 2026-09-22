@@ -114,6 +114,92 @@ final class PrivateMediaStoreTests: XCTestCase {
         XCTAssertFalse(keys.hasKey)
     }
 
+    @MainActor
+    func testMoveVerifiesOriginalBeforeDeletionAndKeepsCopyWhenDeletionIsCancelled() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("original.mp4")
+        let original = Data("original metadata and file bytes".utf8) + Data(repeating: 43, count: PrivateMediaStore.chunkSize + 27)
+        try original.write(to: source)
+        let store = PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys())
+        _ = try await store.unlock()
+        let session = try await store.currentSession()
+        var order: [String] = []
+        let first = try await PrivateGalleryMove.perform(save: {
+            order.append("save")
+            return try await store.save(file: source, fileExtension: "mp4", kind: .video, width: 1920, height: 1080,
+                duration: 2, thumbnail: Data(), profile: nil, session: session)
+        }, verify: { saved in
+            try await store.verifySavedCopy(id: saved.id, original: source, session: session)
+            order.append("verified")
+        }, mayDelete: { true }, deleteOriginal: {
+            order.append("delete requested")
+            throw CancellationError()
+        })
+        XCTAssertEqual(order, ["save", "verified", "delete requested"])
+        XCTAssertFalse(first.originalRemoved)
+        XCTAssertTrue(first.error is CancellationError)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        let savedItems = try await store.list()
+        XCTAssertEqual(savedItems.count, 1)
+        // Retry deletion against the same verified record, without another import.
+        let second = try await PrivateGalleryMove.perform(save: { first.saved }, verify: { saved in
+            try await store.verifySavedCopy(id: saved.id, original: source, session: session)
+        }, mayDelete: { true }, deleteOriginal: { try FileManager.default.removeItem(at: source) })
+        XCTAssertTrue(second.originalRemoved)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        let afterRetry = try await store.list()
+        XCTAssertEqual(afterRetry.count, 1)
+        let restored = root.appendingPathComponent("restored.mp4")
+        try await store.materialize(id: second.saved.id, to: restored, session: session)
+        XCTAssertEqual(try Data(contentsOf: restored), original)
+    }
+
+    @MainActor
+    func testSaveFailureNeverRequestsPhotosDeletion() async throws {
+        var deletionRequested = false
+        do {
+            _ = try await PrivateGalleryMove.perform(save: { throw PrivateMediaStore.StoreError.keyUnavailable },
+                verify: { _ in XCTFail("An unsaved file cannot be verified") }, mayDelete: { true },
+                deleteOriginal: { deletionRequested = true })
+            XCTFail("Save failure was reported as a move")
+        } catch PrivateMediaStore.StoreError.keyUnavailable {}
+        XCTAssertFalse(deletionRequested)
+    }
+
+    @MainActor
+    func testMismatchCorruptionAndLockPreventOriginalDeletion() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("original.jpg")
+        let bytes = Data(repeating: 37, count: 8_192)
+        try bytes.write(to: source)
+        let store = PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys())
+        _ = try await store.unlock()
+        let session = try await store.currentSession()
+        let saved = try await store.save(file: source, fileExtension: "jpg", kind: .photo, width: 100, height: 100,
+            duration: 0, thumbnail: Data(), profile: nil, session: session)
+        let encryptedURL = root.appendingPathComponent("vault/\(saved.id)/media.sealed")
+        let encrypted = try Data(contentsOf: encryptedURL)
+        for scenario in ["source changed", "ciphertext damaged", "locked"] {
+            try (scenario == "source changed" ? bytes + Data([1]) : bytes).write(to: source)
+            try (scenario == "ciphertext damaged" ? Data(encrypted.dropLast()) : encrypted).write(to: encryptedURL)
+            var deletionRequested = false
+            let result = try await PrivateGalleryMove.perform(save: { saved }, verify: { item in
+                try await store.verifySavedCopy(id: item.id, original: source, session: session)
+            }, mayDelete: { scenario != "locked" }, deleteOriginal: { deletionRequested = true })
+            XCTAssertFalse(result.originalRemoved, scenario)
+            XCTAssertNotNil(result.error, scenario)
+            XCTAssertFalse(deletionRequested, scenario)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        }
+        await store.lock()
+        do { try await store.verifySavedCopy(id: saved.id, original: source, session: session); XCTFail("Locked vault authorized deletion") }
+        catch PrivateMediaStore.StoreError.locked {}
+    }
+
     private func temporaryRoot() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("NoctGalleryVaultTests-" + UUID().uuidString) }
 }
 

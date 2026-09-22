@@ -14,7 +14,7 @@ The listener bounds headers, body sizes, connection counts and deadlines; reject
 
 Gallery has no NFC usage description, NFC entitlement, or scanner UI. Apple's browser owns its transport sheet and may offer NFC on capable devices; USB is requested for assertions. Existing `.invalid` registrations retain the original USB smart-card SDK path (FIDO over CCID, YubiKey 5.8+), limited to USB before a connection opens. They are not rewritten as localhost credentials. No continuous-presence promise is made.
 
-Discreet mode requires an existing duress PIN. It presents only a PIN field; a two-second hold on the Gallery logo starts the ordinary factor chain. It does not automatically prompt biometrics. The logo has no accessibility label exposing the gesture. Once deliberately triggered, system biometric or key prompts necessarily reveal the chosen method. This concealment is a UI behavior, not a guarantee against inspection, observation or coercion. Removing the last duress PIN disables discreet mode.
+Discreet mode requires an existing duress PIN. It presents only a PIN field; a six-second hold on the Gallery logo starts the ordinary factor chain. It does not automatically prompt biometrics. The logo has no accessibility label exposing the gesture. Once deliberately triggered, system biometric or key prompts necessarily reveal the chosen method. This concealment is a UI behavior, not a guarantee against inspection, observation or coercion. Removing the last duress PIN disables discreet mode.
 
 These are local app access controls. Factors do not each contribute independent encryption material to the media key. This is not a defense against a compromised OS, debugger attached to a development build, modified app binary, an attacker controlling the Keychain, or arbitrary execution inside the unlocked process. Swift memory management does not guarantee forensic zeroization of every previous plaintext allocation.
 
@@ -47,3 +47,9 @@ Purge and Reset removes Gallery's private files, its keys, unlock settings, pres
 No media is sent to a developer-operated server. PhotoKit may use iCloud, maps/search contact Apple, and StoreKit communicates with Apple. There is no advertising, analytics or tracking SDK. The app never requests current location.
 
 Report vulnerabilities privately to the repository owner. Use disposable fixtures and never attach sensitive photos, key PINs or private media keys to a report.
+
+## Moving Photos originals
+
+Moves stream one complete supported Photos resource into bounded protected scratch storage, preserving its bytes and metadata. The encrypted media, record and thumbnail are authenticated; decrypted chunks must match the imported original before deletion can be requested. Locking, cancellation, changed asset metadata or failed verification prevents the deletion request. A declined or failed Photos deletion retains the encrypted copy. No unattended deletion resumes after relaunch.
+
+Live Photos, edits, RAW pairs and other multipart/unsupported assets are not moved: their originals remain in Photos. Moving a supported item uses Apple's deletion confirmation and can propagate through iCloud Photos. Recently Deleted, external copies and backups are outside Gallery's deletion control. Sharing, copying, reset and duress do not delete Photos originals.

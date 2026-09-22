@@ -53,12 +53,20 @@ Tests use isolated temporary storage and in-memory credential stores. A Simulato
 
 | Workflow | What you can do |
 | --- | --- |
-| Private library | Browse selected Apple Photos or import copies into encrypted local storage. |
+| Private library | Browse Photos, copy cleaned media, or move supported originals into encrypted storage. |
 | Private camera | Capture directly into Gallery, without saving to Apple Photos. |
 | Deliberate sharing | Export newly encoded media with clean, chosen, or synthetic metadata. |
 | Metadata editing | Save presets and choose optional coordinates by map, search, or numeric input. |
 | App protection | Require a PIN, biometrics, a compatible physically connected USB FIDO2 key, or every selected factor. |
 | Duress actions | Reset local storage or retain selected items under a newly rotated key. |
+
+### Move or copy
+
+**Move to Private Gallery** preserves the original file bytes and embedded metadata, verifies the encrypted copy, then asks Photos to delete its original. If saving, verification or deletion fails, the Photos original stays. Cancelling deletion keeps the encrypted copy; the same screen offers **Remove Photos Original** to retry without importing another copy.
+
+Moves support single-resource JPEG, PNG, HEIC/HEIF, MOV, MP4 and M4V media up to 1 GB. Live Photos, RAW pairs, edited/multipart assets and unsupported formats remain in Photos rather than silently losing a component. **Copy to Private Gallery** keeps the Photos source and uses the existing cleaned/re-encoded import.
+
+Photos deletion can sync through iCloud Photos and leaves the item in Recently Deleted for up to 30 days. Clear that album in Photos for immediate permanent removal. Gallery does not promise to erase external copies or backups.
 
 ### Export profiles
 
@@ -79,7 +87,7 @@ factor. Backgrounding or manually locking the app discards active private
 media keys and playback files.
 
 An optional PIN-only waiting screen hides biometric and key hints. Hold the
-Gallery logo for two seconds to start ordinary checks; the visible field still
+Gallery logo for six seconds to start ordinary checks; the visible field still
 accepts duress PINs. In this mode, no biometric prompt starts automatically.
 
 Connect a FIDO2 key by USB. Gallery creates and verifies challenges on-device using a short-lived `localhost` page in Apple's ephemeral authentication browser. No account, hosted authentication service, associated website, or internet connection is required. The browser handles key PIN and touch prompts and supports standard USB FIDO2 independently of the older SDK's FIDO-over-CCID requirement. Keys must support ES256 and user verification. Registration includes a fresh assertion before a credential can be saved.

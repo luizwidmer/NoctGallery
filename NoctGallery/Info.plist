@@ -34,7 +34,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Browse selected photos and videos and create private or sanitized copies. Noct Gallery never changes your Photos originals.</string>
+	<string>Browse photos and videos, save private copies, and remove originals from Photos when you choose Move to Private Gallery.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos and videos directly into your encrypted private gallery without saving them to Photos.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -62,6 +62,8 @@
 		<string>com.luizwidmer.noctgallery.tip.medium</string>
 		<string>com.luizwidmer.noctgallery.tip.large</string>
 	</array>
+	<key>AppSupportAppleID</key>
+	<string>6810294404</string>
 	<key>AppSupportURL</key>
 	<string>https://luizwidmer.com/</string>
 	<key>AppSupportPrivacyPolicyURL</key>

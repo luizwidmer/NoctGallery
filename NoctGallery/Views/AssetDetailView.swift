@@ -13,6 +13,7 @@ struct AssetDetailView: View {
     @State private var editingPrivate = false
     @State private var confirmDelete = false
     @State private var copiedToPrivate = false
+    @State private var savedMoveID: String?
 
     private var configuration: ImageSanitizer.Configuration {
         GalleryPreferences.configuration(format: outputFormat, maximumDimension: maximumDimension, quality: lossyQuality)
@@ -29,7 +30,7 @@ struct AssetDetailView: View {
                 .background(.black.opacity(0.86)).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Label(asset.source == .photos ? "Original stays in Photos" : "Stored in your private gallery",
+                    Label(asset.source == .photos ? "In Photos" : "In your private gallery",
                           systemImage: asset.source == .photos ? "photo.stack" : "lock.shield")
                         .font(.headline)
                     LabeledContent(asset.source == .privateLibrary && asset.decoyProfile == nil ? "Added" : "Captured", value: asset.dateLabel)
@@ -55,14 +56,31 @@ struct AssetDetailView: View {
                     Button {
                         editingPrivate = false
                         showsMetadata = true
-                    } label: { Label("Edit Metadata for Sharing", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity) }
+                    } label: { Label("Edit Share Metadata", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("media.editMetadata")
 
                     if asset.source == .photos {
                         Button {
+                            Task {
+                                if let result = await model.moveToPrivate(asset: asset, savedCopyID: savedMoveID) {
+                                    savedMoveID = result.saved.id
+                                    if result.originalRemoved { dismiss() }
+                                }
+                            }
+                        } label: {
+                            Label(savedMoveID == nil ? "Move to Private Gallery" : "Remove Photos Original",
+                                  systemImage: "arrow.right.square").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("media.moveToPrivate")
+                        Text("Move keeps original quality and metadata. Approve removal from Photos, then empty Recently Deleted. Deletion also syncs through iCloud Photos.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button {
                             Task { copiedToPrivate = await model.saveToPrivate(asset: asset, profile: nil) }
                         } label: { Label(copiedToPrivate ? "Saved to Private Gallery" : "Copy to Private Gallery", systemImage: copiedToPrivate ? "checkmark.circle" : "lock.rectangle.stack").frame(maxWidth: .infinity) }
-                        .buttonStyle(.bordered).disabled(copiedToPrivate)
+                        .buttonStyle(.bordered).disabled(copiedToPrivate || savedMoveID != nil)
+                        Text("Copy saves a cleaned version and keeps the Photos original.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Menu {
                             Button("Edit Saved Metadata", systemImage: "pencil") { editingPrivate = true; showsMetadata = true }
@@ -70,7 +88,7 @@ struct AssetDetailView: View {
                                 Task { await model.prepareShare(asset: asset, configuration: configuration, syntheticMetadata: nil) }
                             }
                             Button("Delete Private Item", systemImage: "trash", role: .destructive) { confirmDelete = true }
-                        } label: { Label("Private Item Options", systemImage: "ellipsis.circle").frame(maxWidth: .infinity) }
+                        } label: { Label("More Options", systemImage: "ellipsis.circle").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                     }
                 }.disabled(model.isProcessing || model.isResetting)
@@ -79,8 +97,8 @@ struct AssetDetailView: View {
                     ProgressView(model.processingMessage ?? "Processing…").padding(.vertical, 8)
                 }
                 Text(asset.kind == .video
-                     ? "Video shares are rebuilt up to 1080p at 30 fps, with standard audio. Hidden source metadata is removed."
-                     : "Sharing creates a protected temporary copy. The source is kept unchanged.")
+                     ? "Video shares: up to 1080p at 30 fps, without source metadata."
+                     : "Sharing creates a temporary copy. The source stays unchanged.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: 780).frame(maxWidth: .infinity)

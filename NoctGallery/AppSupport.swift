@@ -123,7 +123,7 @@ public struct AppSupportCard: View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Support & feedback", systemImage: "heart")
                 .font(.headline)
-            Text("Help shape the app with an honest review, or support its development with an optional App Store tip.")
+            Text("Leave an honest review or an optional tip.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
@@ -157,7 +157,7 @@ public struct AppSupportCard: View {
 
     @ViewBuilder private var actions: some View {
         Button { showsTips = true } label: {
-            Label("Tip via App Store", systemImage: "heart")
+            Label("Leave a Tip", systemImage: "heart")
         }
         .accessibilityIdentifier("app.support.tip")
         Button {
@@ -171,11 +171,11 @@ public struct AppSupportCard: View {
                         if !accepted { reviewMessage = "The App Store could not be opened. Please try again." }
                     }
                 } else {
-                    reviewMessage = "App Store reviews become available after the app is published. In TestFlight, you can use Send Beta Feedback."
+                    reviewMessage = "Reviews are available after release. For beta feedback, use TestFlight."
                 }
             }
         } label: {
-            Label("Write an App Store Review", systemImage: "star.bubble")
+            Label("Leave a Review", systemImage: "star.bubble")
         }
         .disabled(openingReview)
         .accessibilityIdentifier("app.support.review")
@@ -197,7 +197,7 @@ public struct AppTipSheet: View {
                             .font(.system(size: 38, weight: .light)).foregroundStyle(.tint)
                         Text("Support \(AppSupportStore.appName)")
                             .font(.title2.bold())
-                        Text("Your support helps fund maintenance and improvements. Tips are optional, one-time App Store purchases and do not unlock features.")
+                        Text("Optional, one-time tips support development. Every feature is already included.")
                             .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -236,7 +236,7 @@ public struct AppTipSheet: View {
                     if store.products.isEmpty && !store.isLoading {
                         Button("Try Again") { Task { await store.loadProducts() } }
                     }
-                    Text("Payment is handled by Apple. There is no subscription, and the app works the same whether or not you tip.")
+                    Text("Paid through Apple. No subscription.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

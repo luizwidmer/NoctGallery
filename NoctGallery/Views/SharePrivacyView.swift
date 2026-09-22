@@ -7,29 +7,29 @@ struct SharePrivacyView: View {
                 VStack(spacing: 16) {
                     PrivacyCard(
                         icon: "1.circle.fill",
-                        title: "Read on demand",
-                        detail: "Noct Gallery requests original bytes only after you tap a share action. Browsing uses PhotoKit thumbnails."
+                        title: "Read when needed",
+                        detail: "Browsing uses thumbnails. Originals load only when you open or process media."
                     )
                     PrivacyCard(
                         icon: "2.circle.fill",
-                        title: "Decode within limits",
-                        detail: "Encoded size, source pixels, output dimensions, floating-point decoding, and malformed inputs are bounded before export."
+                        title: "Check the media",
+                        detail: "Size and format checks limit processing and reject damaged files."
                     )
                     PrivacyCard(
                         icon: "3.circle.fill",
-                        title: "Rebuild from pixels",
-                        detail: "Orientation and color are normalized, then a new HEIC, JPEG, or PNG is encoded without source metadata dictionaries."
+                        title: "Create a clean copy",
+                        detail: "Re-encode photos and videos without their source metadata."
                     )
                     PrivacyCard(
                         icon: "4.circle.fill",
-                        title: "Erase the handoff",
-                        detail: "The share sheet receives a randomized protected file. It is removed after sharing, cancellation, or the next launch."
+                        title: "Remove temporary files",
+                        detail: "Protected share files are removed after sharing, cancellation or next launch."
                     )
 
                     VStack(alignment: .leading, spacing: 10) {
                         Label("Decoy metadata is not anonymity", systemImage: "exclamationmark.shield")
                             .font(.headline)
-                        Text("It changes selected EXIF, TIFF, and GPS fields on the temporary export. The picture itself, destination account, timing, and network records may still reveal its origin.")
+                        Text("Decoy metadata changes file details. Visible content, sharing accounts and network records can still identify you.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

@@ -34,7 +34,7 @@ struct MetadataEditorView: View {
                 }
                 Section {
                     Toggle("Include camera metadata", isOn: Binding(get: { profile.includesEquipment }, set: { profile.includeEquipment = $0 }))
-                    Text("Turn off to change only the date and optional GPS, without claiming any camera model.")
+                    Text("Turn off to include only the date and optional location.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if profile.includesEquipment {
@@ -71,7 +71,7 @@ struct MetadataEditorView: View {
                         }
                     } else {
                         Section {
-                            Text("Video copies include the selected make, model, date and optional GPS. Photo exposure and lens tags are not written into the movie.")
+                            Text("Videos include camera, date and optional location. Photo exposure and lens tags are omitted.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
@@ -121,7 +121,7 @@ struct MetadataEditorView: View {
                     }
                 }
                 Section {
-                    Text("Creates new metadata from the selected equipment and settings. Serial numbers, owner names and source metadata are removed. Synthetic metadata can still be recognized. Clean copies remove these fields; neither option changes what the media shows.")
+                    Text("Replaces source metadata with these settings. Synthetic metadata may be recognizable; it cannot hide what the media shows.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
@@ -185,7 +185,7 @@ struct CameraMetadataSettingsView: View {
                     Text("Remove camera, time and location metadata from each private capture.")
                         .font(.footnote).foregroundStyle(.secondary)
                 case .random:
-                    Text("Vary the camera, lens, compatible exposure, date and time zone for each capture. GPS is optional.")
+                    Text("Randomize camera, exposure and date for each capture. Location is optional.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Toggle("Include camera metadata", isOn: $model.randomIncludesEquipment)
                     Toggle("Include random GPS", isOn: $model.randomIncludesLocation)
@@ -199,7 +199,7 @@ struct CameraMetadataSettingsView: View {
                         Picker("Radius", selection: $model.randomLocationRadius) {
                             ForEach([0.5, 1.0, 5.0, 10.0, 25.0], id: \.self) { Text("\($0.formatted()) km").tag($0) }
                         }
-                        Text("Coordinates vary within the area; they can land on water or private property. Review the map before sharing when a precise place matters.")
+                        Text("Random places may fall on water or private property. Check the map before sharing.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 case .preset:
@@ -207,7 +207,7 @@ struct CameraMetadataSettingsView: View {
                         Text("Choose a preset").tag("")
                         ForEach(model.presets) { preset in Text(preset.name).tag(preset.id.uuidString) }
                     }
-                    Text("Preserve the preset’s equipment and place. Its date offset advances with each capture.")
+                    Text("Use the preset’s camera, place and date offset.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } header: { Text("Camera metadata") }
