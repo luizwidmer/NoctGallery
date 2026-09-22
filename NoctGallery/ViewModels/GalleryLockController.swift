@@ -1,7 +1,7 @@
-import CoreNFC
 import LocalAuthentication
 import NoctweaveSecurityKeys
 import SwiftUI
+import UIKit
 
 @MainActor
 final class GalleryLockController: ObservableObject {
@@ -18,7 +18,8 @@ final class GalleryLockController: ObservableObject {
     private var wantsProtectionSettings = false
     private var generation = UUID()
     private var context: LAContext?
-    private let hardware = HardwareSecurityKey()
+    private let hardware = HardwareSecurityKey(allowedTransports: [.usb])
+    private let localKey = LocalSecurityKey(brandImagePNG: UIImage(named: "NoctGalleryBrand")?.pngData())
     let store: GalleryLockStore
 
     init(store: GalleryLockStore = GalleryLockStore()) { self.store = store }
@@ -31,7 +32,10 @@ final class GalleryLockController: ObservableObject {
         _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
         return context.biometryType == .faceID ? "Face ID" : "Touch ID"
     }
-    var securityKeysAvailable: Bool { NFCTagReaderSession.readingAvailable }
+    var securityKeysAvailable: Bool { true }
+    var hasLocalKeys: Bool { configuration?.keys.contains { $0.relyingPartyID == SecurityKeyApplication.noctGalleryLocal.relyingPartyID } == true }
+    var hasLegacyKeys: Bool { configuration?.keys.contains { $0.relyingPartyID == SecurityKeyApplication.noctGallery.relyingPartyID } == true }
+    var requiresLegacyKeyPIN: Bool { hasLegacyKeys && !hasLocalKeys }
     var biometricsAvailable: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
     func load() async {
@@ -51,6 +55,7 @@ final class GalleryLockController: ObservableObject {
         generation = UUID()
         context?.invalidate()
         context = nil
+        localKey.cancel()
         Task { await hardware.cancel() }
         completed = []
         verifiedKey = nil
@@ -85,15 +90,15 @@ final class GalleryLockController: ObservableObject {
         } catch { if attempt == generation { showAuthenticationError(error) } }
     }
 
-    func authenticateKey(pin: String, transport: SecurityKeyTransport) async {
-        guard !isBusy, !isUnlocked, pendingDuress == nil, securityKeysAvailable, transport == .nfc, nextFactor == .securityKey,
+    func authenticateKey(pin: String, transport: SecurityKeyTransport, useLegacy: Bool = false) async {
+        guard !isBusy, !isUnlocked, pendingDuress == nil, securityKeysAvailable, transport == .usb, nextFactor == .securityKey,
               let credentials = configuration?.keys else { return }
         let attempt = generation
         isBusy = true
         message = nil
         defer { isBusy = false }
         do {
-            let result = try await hardware.authenticate(application: .noctGallery, credentials: credentials, pin: pin, transport: transport)
+            let result = try await authenticateRegisteredKey(credentials, pin: pin, useLegacy: useLegacy || requiresLegacyKeyPIN)
             guard attempt == generation else { return }
             configuration = try await store.updateCounter(result)
             guard attempt == generation else { return }
@@ -124,8 +129,8 @@ final class GalleryLockController: ObservableObject {
         } catch { if attempt == generation { message = error.localizedDescription } }
     }
 
-    func verifyKeyForSetup(name: String, pin: String, transport: SecurityKeyTransport, register: Bool) async {
-        guard !isBusy, securityKeysAvailable, transport == .nfc, (isUnlocked || configuration == nil), pendingDuress == nil else { return }
+    func verifyKeyForSetup(name: String, pin: String, transport: SecurityKeyTransport, register: Bool, useLegacy: Bool = false) async {
+        guard !isBusy, securityKeysAvailable, transport == .usb, (isUnlocked || configuration == nil), pendingDuress == nil else { return }
         let attempt = generation
         isBusy = true
         verifiedKey = nil
@@ -134,10 +139,10 @@ final class GalleryLockController: ObservableObject {
         do {
             let result: SecurityKeyCredential
             if register {
-                result = try await hardware.register(application: .noctGallery, name: name,
-                    excluding: configuration?.keys ?? [], pin: pin, transport: transport)
+                result = try await localKey.register(name: name,
+                    excluding: configuration?.keys ?? [], anchor: presentationAnchor())
             } else {
-                result = try await hardware.authenticate(application: .noctGallery, credentials: configuration?.keys ?? [], pin: pin, transport: transport)
+                result = try await authenticateRegisteredKey(configuration?.keys ?? [], pin: pin, useLegacy: useLegacy)
             }
             guard attempt == generation else { return }
             if !register { configuration = try await store.updateCounter(result) }
@@ -146,8 +151,30 @@ final class GalleryLockController: ObservableObject {
         } catch { if attempt == generation { showAuthenticationError(error) } }
     }
 
+    private func presentationAnchor() throws -> UIWindow {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .filter({ $0.activationState == .foregroundActive })
+            .flatMap(\.windows).first(where: \.isKeyWindow) else { throw SecurityKeyError.unavailable }
+        return window
+    }
+
+    private func authenticateRegisteredKey(_ credentials: [SecurityKeyCredential], pin: String,
+                                           useLegacy: Bool) async throws -> SecurityKeyCredential {
+        if useLegacy {
+            return try await hardware.authenticate(application: .noctGallery,
+                credentials: credentials.filter { $0.relyingPartyID == SecurityKeyApplication.noctGallery.relyingPartyID },
+                pin: pin, transport: .usb)
+        }
+        return try await localKey.authenticate(credentials: credentials.filter { $0.relyingPartyID == SecurityKeyApplication.noctGalleryLocal.relyingPartyID },
+            anchor: presentationAnchor())
+    }
+
     func configure(mode: GalleryLockMode, pin: String, discreet: Bool = false) async -> Bool {
-        guard !isBusy, !loadFailed, (isUnlocked || configuration == nil), pendingDuress == nil else { return false }
+        guard !isBusy else { return false }
+        guard !loadFailed, (isUnlocked || configuration == nil), pendingDuress == nil else {
+            message = GalleryLockError.locked.localizedDescription
+            return false
+        }
         let attempt = generation
         isBusy = true
         message = nil

@@ -129,7 +129,8 @@ struct GalleryLockConfiguration: Codable, Sendable {
         guard version == 1, failedAttempts >= 0, failedAttempts <= 30,
               mode.factors.contains(.pin) == (pin != nil),
               !mode.factors.contains(.securityKey) || !keys.isEmpty,
-              keys.count <= 8, keys.allSatisfy({ $0.isStructurallyValid && $0.relyingPartyID == SecurityKeyApplication.noctGallery.relyingPartyID }),
+              keys.count <= 8, keys.allSatisfy({ $0.isStructurallyValid &&
+                  [SecurityKeyApplication.noctGallery.relyingPartyID, SecurityKeyApplication.noctGalleryLocal.relyingPartyID].contains($0.relyingPartyID) }),
               Set(keys.map(\.credentialID)).count == keys.count,
               duress.count <= 2, Set(duress.map(\.action)).count == duress.count,
               mode != .off || duress.isEmpty, discreetUnlock != true || (mode != .off && !duress.isEmpty),
@@ -255,6 +256,7 @@ actor GalleryLockStore {
               let index = value.keys.firstIndex(where: { $0.id == credential.id }),
               credential.credentialID == value.keys[index].credentialID,
               credential.publicKey == value.keys[index].publicKey,
+              credential.relyingPartyID == value.keys[index].relyingPartyID,
               credential.signatureCounter == 0 && value.keys[index].signatureCounter == 0
                 || credential.signatureCounter > value.keys[index].signatureCounter else { throw GalleryLockError.rejected }
         value.keys[index] = credential

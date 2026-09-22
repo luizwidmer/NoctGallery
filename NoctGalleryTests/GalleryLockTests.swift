@@ -85,6 +85,41 @@ final class GalleryLockTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalAndEarlierKeysPersistWithoutChangingCredentialScope() async throws {
+        let persistence = MemoryGalleryLockPersistence()
+        let store = GalleryLockStore(persistence: persistence)
+        let publicKey = P256.Signing.PrivateKey().publicKey.x963Representation
+        let legacy = SecurityKeyCredential(name: "Earlier key", relyingPartyID: SecurityKeyApplication.noctGallery.relyingPartyID,
+            credentialID: Data([1]), publicKey: publicKey, signatureCounter: 1)
+        var local = SecurityKeyCredential(name: "Local key", relyingPartyID: SecurityKeyApplication.noctGalleryLocal.relyingPartyID,
+            credentialID: Data([2]), publicKey: publicKey, signatureCounter: 1)
+        _ = try await store.configure(mode: .allThree, pin: "482951", keys: [legacy, local])
+        let reopened = GalleryLockController(store: GalleryLockStore(persistence: persistence))
+        await reopened.load()
+        XCTAssertTrue(reopened.hasLocalKeys)
+        XCTAssertTrue(reopened.hasLegacyKeys)
+        XCTAssertFalse(reopened.requiresLegacyKeyPIN)
+        local.signatureCounter = 2
+        let saved = try await store.updateCounter(local)
+        XCTAssertEqual(saved.keys, [legacy, local])
+        let scopeChange = SecurityKeyCredential(id: local.id, name: local.name, relyingPartyID: legacy.relyingPartyID,
+            credentialID: local.credentialID, publicKey: publicKey, signatureCounter: 3)
+        do { _ = try await store.updateCounter(scopeChange); XCTFail("Credential scope changed during assertion") }
+        catch GalleryLockError.rejected {}
+        do { _ = try await store.updateCounter(local); XCTFail("Counter replay was persisted") }
+        catch GalleryLockError.rejected {}
+        let unchanged = try await store.load()
+        XCTAssertEqual(unchanged?.keys, [legacy, local])
+        await reopened.submitPIN("482951")
+        XCTAssertFalse(reopened.isUnlocked)
+        XCTAssertEqual(reopened.nextFactor, .securityKey)
+        let alien = SecurityKeyCredential(name: "Wrong app", relyingPartyID: "example.com",
+            credentialID: Data([3]), publicKey: publicKey, signatureCounter: 0)
+        do { _ = try await store.configure(mode: .securityKey, pin: "", keys: [alien]); XCTFail("External scope persisted") }
+        catch GalleryLockError.storage {}
+    }
+
+    @MainActor
     func testPINCannotSatisfyBiometricsOrSecurityKeyAndLockClearsProofs() async throws {
         let persistence = MemoryGalleryLockPersistence()
         let store = GalleryLockStore(persistence: persistence)

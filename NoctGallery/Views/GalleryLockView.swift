@@ -6,8 +6,6 @@ struct GalleryLockView: View {
     @EnvironmentObject private var model: GalleryViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var pin = ""
-    @State private var keyPIN = ""
-    @State private var transport = SecurityKeyTransport.nfc
     @State private var automaticBiometricAttempted = false
     @State private var showsReset = false
     @State private var resetText = ""
@@ -47,15 +45,7 @@ struct GalleryLockView: View {
                     if lock.nextFactor == .securityKey, !lock.isDiscreet {
                         VStack(spacing: 16) {
                             Label("Security Key", systemImage: "key.horizontal").font(.headline)
-                            SecurityKeyConnectionLabel()
-                            SecureField("Security key PIN", text: $keyPIN)
-                                .textContentType(.none).textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .textFieldStyle(.roundedBorder)
-                            Button("Verify Key") {
-                                let entered = keyPIN
-                                keyPIN = ""
-                                Task { await lock.authenticateKey(pin: entered, transport: transport) }
-                            }.buttonStyle(.borderedProminent).disabled(lock.isBusy)
+                            GalleryKeyUnlockControls()
                         }.padding(22).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24))
                     }
                     if lock.nextFactor == .biometrics, !lock.isDiscreet {
@@ -98,7 +88,7 @@ struct GalleryLockView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { beginAutomaticBiometrics() }
             if phase == .background {
-                pin = ""; keyPIN = ""; normalUnlockRequested = false
+                pin = ""; normalUnlockRequested = false
                 automaticBiometricAttempted = false; showsHiddenKey = false
             }
         }
@@ -110,7 +100,7 @@ struct GalleryLockView: View {
             if lock.completed.contains(.securityKey) { beginAutomaticBiometrics() }
             else { normalUnlockRequested = false }
         }) { GalleryHiddenKeyPrompt() }
-        .onDisappear { pin = ""; keyPIN = "" }
+        .onDisappear { pin = "" }
         .alert("Reset Noct Gallery?", isPresented: $showsReset) {
             TextField("Type RESET to confirm", text: $resetText).textInputAutocapitalization(.characters).autocorrectionDisabled()
             Button("Cancel", role: .cancel) {}
@@ -131,23 +121,45 @@ struct GalleryLockView: View {
 private struct GalleryHiddenKeyPrompt: View {
     @EnvironmentObject private var lock: GalleryLockController
     @Environment(\.dismiss) private var dismiss
-    @State private var pin = ""
     var body: some View {
         NavigationStack {
             Form {
                 Section("Security key") {
-                    SecurityKeyConnectionLabel()
-                    SecureField("Security key PIN", text: $pin).textContentType(.none).autocorrectionDisabled()
-                    Button("Verify Key") {
-                        let entered = pin; pin = ""
-                        Task { await lock.authenticateKey(pin: entered, transport: .nfc) }
-                    }.disabled(lock.isBusy)
+                    GalleryKeyUnlockControls()
                     if lock.isBusy { ProgressView() }
                     if let message = lock.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
             }.navigationTitle("Unlock").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(lock.isBusy) } }
         }.presentationDetents([.medium, .large]).interactiveDismissDisabled(lock.isBusy)
+    }
+}
+
+private struct GalleryKeyUnlockControls: View {
+    @EnvironmentObject private var lock: GalleryLockController
+    @State private var legacy = false
+    @State private var pin = ""
+    private var usesLegacy: Bool { lock.requiresLegacyKeyPIN || legacy }
+
+    var body: some View {
+        SecurityKeyConnectionLabel()
+        if lock.hasLegacyKeys && lock.hasLocalKeys {
+            Toggle("Use an earlier registration", isOn: $legacy)
+        }
+        if usesLegacy {
+            SecureField("Security key PIN", text: $pin)
+                .textContentType(.none).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+        } else {
+            Text("Verify your key in the local authentication sheet.").font(.footnote).foregroundStyle(.secondary)
+        }
+        Button("Verify Key") {
+            let entered = pin; pin = ""
+            Task { await lock.authenticateKey(pin: entered, transport: .usb, useLegacy: usesLegacy) }
+        }.buttonStyle(.borderedProminent).disabled(lock.isBusy)
+            .accessibilityIdentifier("lock.verifyKey")
+            .onChange(of: legacy) { _, _ in pin = "" }
+            .onDisappear { pin = "" }
     }
 }
 
@@ -164,7 +176,7 @@ struct GalleryPINField: View {
 
 struct SecurityKeyConnectionLabel: View {
     var body: some View {
-        Label("NFC · scan near the top of your iPhone", systemImage: "wave.3.right")
+        Label("USB · connect your security key", systemImage: "cable.connector")
             .font(.subheadline).foregroundStyle(.secondary)
     }
 }
@@ -178,7 +190,7 @@ struct GalleryProtectionView: View {
     @State private var confirmation = ""
     @State private var keyPIN = ""
     @State private var keyName = "Security Key"
-    @State private var transport = SecurityKeyTransport.nfc
+    private let transport = SecurityKeyTransport.usb
     @State private var loaded = false
     @State private var discreet = false
 
@@ -228,9 +240,16 @@ struct GalleryProtectionView: View {
                 Section("Hardware security key") {
                     SecurityKeyConnectionLabel()
                     TextField("Key name", text: $keyName).autocorrectionDisabled()
-                    SecureField("Security key’s FIDO2 PIN", text: $keyPIN).textContentType(.none).autocorrectionDisabled()
-                    if !(lock.configuration?.keys.isEmpty ?? true) {
+                    if lock.hasLocalKeys {
                         Button("Verify Registered Key") { verify(register: false) }
+                    }
+                    if lock.hasLegacyKeys {
+                        SecureField("Earlier registration’s FIDO2 PIN", text: $keyPIN).textContentType(.none).autocorrectionDisabled()
+                        Button("Verify Earlier Registration") { verify(register: false, useLegacy: true) }
+                        Text("Earlier registrations retain their original USB smart-card connection. Register the key again below to use the local FIDO2 flow with broader key support.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if !(lock.configuration?.keys.isEmpty ?? true) {
                         ForEach(lock.configuration?.keys ?? []) { key in
                             Label(key.name, systemImage: "key.horizontal").font(.subheadline).foregroundStyle(.secondary)
                         }
@@ -238,7 +257,7 @@ struct GalleryProtectionView: View {
                     Button("Register Another Key") { verify(register: true) }
                         .disabled((lock.configuration?.keys.count ?? 0) >= 8)
                     if let key = lock.verifiedKey { Label("Verified: \(key.name)", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
-                    Text("Use a FIDO2 NFC key with user verification on a compatible iPhone. Each unlock needs a scan. USB and continuous key-presence locking are unavailable on this platform.")
+                    Text("Connect a FIDO2 security key with PIN or built-in user verification. Authentication stays on this device, with no account or internet connection needed. iOS handles the key PIN and touch prompts. Registration includes a second verification before protection can be saved. Gallery does not scan NFC tags; iOS controls the connection options in its own sheet.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.disabled(lock.isBusy || !lock.securityKeysAvailable)
             }
@@ -270,7 +289,11 @@ struct GalleryProtectionView: View {
                     }
                 } label: {
                     HStack { Text("Save Protection"); Spacer(); if lock.isBusy { ProgressView() } }
-                }.disabled(!canSave).accessibilityIdentifier("protection.save")
+                }.buttonStyle(.borderless).disabled(saveRequirement != nil).accessibilityIdentifier("protection.save")
+                if let requirement = saveRequirement {
+                    Text(requirement).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("protection.saveRequirement")
+                }
             }
         }
         .navigationTitle(onboarding ? "Welcome" : "App Protection")
@@ -282,15 +305,30 @@ struct GalleryProtectionView: View {
         .onAppear { if !loaded { mode = lock.configuration?.mode ?? .pin; discreet = lock.isDiscreet; loaded = true; lock.message = nil } }
         .onDisappear { pin = ""; confirmation = ""; keyPIN = "" }
     }
-    private var canSave: Bool {
-        !lock.isBusy && (!mode.factors.contains(.pin) || (pin.isEmpty && confirmation.isEmpty && lock.configuration?.pin != nil)
-            || (GalleryPINVerifier.isValid(pin) && pin == confirmation))
-        && (!mode.factors.contains(.biometrics) || lock.biometricsAvailable)
-        && (!mode.factors.contains(.securityKey) || (lock.securityKeysAvailable && lock.verifiedKey != nil))
+    private var saveRequirement: String? {
+        if lock.isBusy { return "Finish the current verification before saving." }
+        if mode.factors.contains(.pin) {
+            let keepingPIN = pin.isEmpty && confirmation.isEmpty && lock.configuration?.pin != nil
+            if !keepingPIN {
+                if !GalleryPINVerifier.isValid(pin) {
+                    return lock.configuration?.pin == nil
+                        ? "Enter and confirm a six-digit Gallery PIN."
+                        : "Enter and confirm a new six-digit Gallery PIN, or leave both fields empty to keep your current PIN."
+                }
+                if pin != confirmation { return "The new Gallery PIN and its confirmation must match." }
+            }
+        }
+        if mode.factors.contains(.biometrics), !lock.biometricsAvailable {
+            return "Set up \(lock.biometricName) in Settings before saving this unlock combination."
+        }
+        if mode.factors.contains(.securityKey), lock.verifiedKey == nil {
+            return "Register a key and finish its verification, or verify an already registered key, before saving."
+        }
+        return nil
     }
-    private func verify(register: Bool) {
+    private func verify(register: Bool, useLegacy: Bool = false) {
         let entered = keyPIN
         keyPIN = ""
-        Task { await lock.verifyKeyForSetup(name: keyName, pin: entered, transport: transport, register: register) }
+        Task { await lock.verifyKeyForSetup(name: keyName, pin: entered, transport: transport, register: register, useLegacy: useLegacy) }
     }
 }

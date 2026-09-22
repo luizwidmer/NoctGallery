@@ -123,7 +123,7 @@ public struct AppSupportCard: View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Support & feedback", systemImage: "heart")
                 .font(.headline)
-            Text("Help shape the app with an honest review, or leave an optional tip to support its development.")
+            Text("Help shape the app with an honest review, or support its development with an optional App Store tip.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
@@ -149,12 +149,15 @@ public struct AppSupportCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // Form rows otherwise promote automatic buttons to a shared row action.
+        // Keep the tip, review and support actions independent on iPhone and iPad.
+        .buttonStyle(.borderless)
         .sheet(isPresented: $showsTips) { AppTipSheet() }
     }
 
     @ViewBuilder private var actions: some View {
         Button { showsTips = true } label: {
-            Label("Leave a Tip", systemImage: "heart")
+            Label("Tip via App Store", systemImage: "heart")
         }
         .accessibilityIdentifier("app.support.tip")
         Button {
@@ -194,7 +197,7 @@ public struct AppTipSheet: View {
                             .font(.system(size: 38, weight: .light)).foregroundStyle(.tint)
                         Text("Support \(AppSupportStore.appName)")
                             .font(.title2.bold())
-                        Text("Your support helps fund maintenance and improvements. Tips are optional, one-time purchases and do not unlock features.")
+                        Text("Your support helps fund maintenance and improvements. Tips are optional, one-time App Store purchases and do not unlock features.")
                             .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

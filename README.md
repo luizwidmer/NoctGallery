@@ -47,7 +47,7 @@ xcodebuild -project NoctGallery.xcodeproj -scheme NoctGallery \
   ARCHS=arm64 ONLY_ACTIVE_ARCH=YES EXCLUDED_ARCHS=x86_64 test
 ```
 
-Tests use isolated temporary storage and in-memory credential stores. A Simulator build does not validate a physical camera, Face ID hardware or NFC key. Device builds require the NFC Tag Reading capability and a matching provisioning profile. A separate review installation can be built by overriding `PRODUCT_BUNDLE_IDENTIFIER` and `GALLERY_DISPLAY_NAME`.
+Tests use isolated temporary storage and in-memory credential stores. A Simulator build does not validate a physical camera, Face ID hardware or a connected USB key. The local FIDO2 flow needs no associated-domain or NFC entitlement. A separate review installation can be built by overriding `PRODUCT_BUNDLE_IDENTIFIER` and `GALLERY_DISPLAY_NAME`.
 
 ## Features
 
@@ -57,7 +57,7 @@ Tests use isolated temporary storage and in-memory credential stores. A Simulato
 | Private camera | Capture directly into Gallery, without saving to Apple Photos. |
 | Deliberate sharing | Export newly encoded media with clean, chosen, or synthetic metadata. |
 | Metadata editing | Save presets and choose optional coordinates by map, search, or numeric input. |
-| App protection | Require a PIN, biometrics, a compatible iPhone NFC FIDO2 key, or every selected factor. |
+| App protection | Require a PIN, biometrics, a compatible physically connected USB FIDO2 key, or every selected factor. |
 | Duress actions | Reset local storage or retain selected items under a newly rotated key. |
 
 ### Export profiles
@@ -81,6 +81,10 @@ media keys and playback files.
 An optional PIN-only waiting screen hides biometric and key hints. Hold the
 Gallery logo for two seconds to start ordinary checks; the visible field still
 accepts duress PINs. In this mode, no biometric prompt starts automatically.
+
+Connect a FIDO2 key by USB. Gallery creates and verifies challenges on-device using a short-lived `localhost` page in Apple's ephemeral authentication browser. No account, hosted authentication service, associated website, or internet connection is required. The browser handles key PIN and touch prompts and supports standard USB FIDO2 independently of the older SDK's FIDO-over-CCID requirement. Keys must support ES256 and user verification. Registration includes a fresh assertion before a credential can be saved.
+
+Gallery's NFC scanner and permissions are removed. Apple's own security-key sheet controls its connection options and may offer NFC on capable devices. Existing registrations keep their original `noctgallery-app-lock.invalid` scope and USB smart-card path, which requires compatible FIDO over CCID (YubiKey 5.8+). Re-register after unlocking to use the new local flow; credentials are never silently migrated or bypassed. See [local FIDO2 design](Docs/LocalFIDO2.md).
 
 When a duress action retains selected items, Gallery re-encrypts them with a
 new storage key and makes the duress PIN the sole ordinary unlock PIN.
