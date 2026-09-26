@@ -114,7 +114,7 @@ final class GalleryLockController: ObservableObject {
         message = nil
         defer { isBusy = false }
         do {
-            let result = try await store.attemptPIN(pin)
+            let result = try await store.attemptPIN(pin, allowPrimary: nextFactor == .pin)
             switch result {
             case .duress(let plan):
                 // A committed action survives cancellation/backgrounding. No ordinary

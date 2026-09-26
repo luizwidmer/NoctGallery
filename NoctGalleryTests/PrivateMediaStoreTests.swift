@@ -96,6 +96,7 @@ final class PrivateMediaStoreTests: XCTestCase {
         keys.setDeleteFailure(true)
         do { try await store.reset(); XCTFail("Reset reported success after key deletion failed") } catch {}
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("reset.pending").path))
+        XCTAssertTrue(try Data(contentsOf: root.appendingPathComponent("reset.pending")).isEmpty)
         do { _ = try await store.unlock(); XCTFail("Opened a vault with pending reset") }
         catch PrivateMediaStore.StoreError.resetPending {}
         keys.setDeleteFailure(false)

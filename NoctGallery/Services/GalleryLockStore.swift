@@ -222,7 +222,7 @@ actor GalleryLockStore {
         try save(value)
         return value
     }
-    func attemptPIN(_ pin: String, now: Date = Date()) throws -> PINResult {
+    func attemptPIN(_ pin: String, allowPrimary: Bool = true, now: Date = Date()) throws -> PINResult {
         guard GalleryPINVerifier.isValid(pin) else { throw GalleryLockError.invalidPIN }
         guard var value = try load(), value.pendingDuress == nil else { throw GalleryLockError.locked }
         if let retry = value.retryAfter, now < retry { throw GalleryLockError.cooldown(retry) }
@@ -245,7 +245,10 @@ actor GalleryLockStore {
             try save(value)
             return .duress(plan)
         }
-        guard primary else { throw GalleryLockError.rejected }
+        // Duress is deliberately available before other factors. A matching
+        // ordinary PIN must not clear the retry ledger until its turn in the
+        // configured key -> biometrics -> PIN sequence.
+        guard primary, allowPrimary else { throw GalleryLockError.rejected }
         value.failedAttempts = 0
         value.retryAfter = nil
         try save(value)

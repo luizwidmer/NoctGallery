@@ -233,7 +233,10 @@ actor PrivateMediaStore {
         master = nil
         session = UUID()
         try MediaFileProtection.prepareDirectory(root)
-        try Data([1]).write(to: root.appendingPathComponent("reset.pending"), options: [.atomic, .completeFileProtection])
+        // Presence is the recovery signal; the marker has no plaintext payload.
+        let resetMarker = root.appendingPathComponent("reset.pending")
+        try Data().write(to: resetMarker, options: [.atomic, .completeFileProtection])
+        try MediaFileProtection.protect(resetMarker)
         for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
             where url.lastPathComponent != "reset.pending" { try manager.removeItem(at: url) }
         try keys.delete()
@@ -255,8 +258,16 @@ actor PrivateMediaStore {
         defer { master = nil }
         let markerName = "duress.ready"
         let marker = Data(plan.id.uuidString.utf8)
+        let markerKey = SymmetricKey(data: plan.replacementMediaKey)
+        let markerAAD = Data("NoctGallery.duress.ready.v1".utf8)
         func isReady(_ directory: URL) -> Bool {
-            (try? Data(contentsOf: directory.appendingPathComponent(markerName))) == marker
+            guard let stored = try? Data(contentsOf: directory.appendingPathComponent(markerName)) else { return false }
+            // Resume a transition created by an older build before replacing
+            // its plaintext marker with the sealed format below.
+            if stored == marker { return true }
+            guard let box = try? AES.GCM.SealedBox(combined: stored),
+                  let opened = try? AES.GCM.open(box, using: markerKey, authenticating: markerAAD) else { return false }
+            return opened == marker
         }
         if manager.fileExists(atPath: duressOld.path) {
             if !manager.fileExists(atPath: root.path), isReady(duressNext) {
@@ -273,7 +284,10 @@ actor PrivateMediaStore {
                     .filter { plan.retainedIDs.contains($0.lastPathComponent) }
                 for source in existing { try rekey(id: source.lastPathComponent, to: duressNext, newMaster: plan.replacementMediaKey) }
             }
-            try marker.write(to: duressNext.appendingPathComponent(markerName), options: [.atomic, .completeFileProtection])
+            let sealedMarker = try AES.GCM.seal(marker, using: markerKey, authenticating: markerAAD).combined!
+            let markerURL = duressNext.appendingPathComponent(markerName)
+            try sealedMarker.write(to: markerURL, options: [.atomic, .completeFileProtection])
+            try MediaFileProtection.protect(markerURL)
             try manager.moveItem(at: root, to: duressOld)
             try manager.moveItem(at: duressNext, to: root)
         }

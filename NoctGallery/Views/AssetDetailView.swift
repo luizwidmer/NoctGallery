@@ -5,9 +5,6 @@ import SwiftUI
 struct AssetDetailView: View {
     @EnvironmentObject private var model: GalleryViewModel
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("share.outputFormat") private var outputFormat = GalleryOutputFormat.heic.rawValue
-    @AppStorage("share.maximumDimension") private var maximumDimension = 8_192
-    @AppStorage("share.lossyQuality") private var lossyQuality = 0.90
     let asset: PhotoAssetRecord
     @State private var showsMetadata = false
     @State private var editingPrivate = false
@@ -16,7 +13,8 @@ struct AssetDetailView: View {
     @State private var savedMoveID: String?
 
     private var configuration: ImageSanitizer.Configuration {
-        GalleryPreferences.configuration(format: outputFormat, maximumDimension: maximumDimension, quality: lossyQuality)
+        GalleryPreferences.configuration(format: model.shareOutputFormat, maximumDimension: model.shareMaximumDimension,
+            quality: model.shareLossyQuality)
     }
 
     var body: some View {
@@ -40,7 +38,7 @@ struct AssetDetailView: View {
                         LabeledContent("Metadata profile", value: profile.displayName)
                         LabeledContent("Location", value: profile.location?.name ?? "No GPS")
                     }
-                    LabeledContent("Share format", value: asset.kind == .video ? "H.264 video · MOV" : (GalleryOutputFormat(rawValue: outputFormat) ?? .heic).title)
+                    LabeledContent("Share format", value: asset.kind == .video ? "H.264 video · MOV" : (GalleryOutputFormat(rawValue: model.shareOutputFormat) ?? .heic).title)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(18)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))

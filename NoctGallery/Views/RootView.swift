@@ -6,22 +6,33 @@ struct RootView: View {
     @EnvironmentObject private var lock: GalleryLockController
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("onboarding.completed") private var completedOnboarding = false
+    @State private var showsProtectedSettingsResetConfirmation = false
 
     var body: some View {
         ZStack {
             NoctGalleryTheme.background(for: colorScheme)
                 .ignoresSafeArea()
 
-            if !lock.isLoaded || lock.loadFailed || lock.pendingDuress != nil || model.isResetting || model.resetNeedsRetry {
+            if let settingsError = model.settingsLoadError {
+                VStack(spacing: 18) {
+                    NoctGalleryMark()
+                    Text("Protected settings unavailable").font(.title2.bold())
+                    Text(settingsError).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                    Button("Retry") { model.retrySettingsLoad() }.buttonStyle(.borderedProminent)
+                    Button("Purge and Reset App", role: .destructive) {
+                        showsProtectedSettingsResetConfirmation = true
+                    }
+                }
+                .padding(28)
+            } else if !lock.isLoaded || lock.loadFailed || lock.pendingDuress != nil || model.isResetting || model.resetNeedsRetry {
                 GalleryLockView()
             } else if lock.configuration == nil {
                 NavigationStack { GalleryProtectionView(onboarding: true) }
             } else if !lock.isUnlocked {
                 GalleryLockView()
-            } else if !completedOnboarding {
+            } else if !model.onboardingCompleted {
                 OnboardingView {
-                    completedOnboarding = true
+                    model.onboardingCompleted = true
                 }
             } else {
                 MainTabView()
@@ -57,6 +68,14 @@ struct RootView: View {
             Button("OK") { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "An unknown error occurred.")
+        }
+        .confirmationDialog("Permanently remove all Gallery data?",
+                            isPresented: $showsProtectedSettingsResetConfirmation) {
+            Button("Purge and Reset App", role: .destructive) {
+                Task { await model.purgeAndReset() }
+            }
+        } message: {
+            Text("Private media, protection settings, and Gallery preferences will be removed from this device.")
         }
     }
 

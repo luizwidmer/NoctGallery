@@ -30,12 +30,16 @@ final class TemporaryExportStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "onboarding.completed")
         defaults.set("png", forKey: "share.outputFormat")
+        let settings = GallerySettingsStore(service: suite + ".settings", defaults: defaults)
+        defer { try? settings.purge() }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root), privateStore: PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys()), workStore: MediaWorkStore(root: root.appendingPathComponent("work")), defaults: defaults, lock: GalleryLockController(store: GalleryLockStore(persistence: MemoryGalleryLockPersistence())))
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root), privateStore: PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys()), workStore: MediaWorkStore(root: root.appendingPathComponent("work")), defaults: defaults, lock: GalleryLockController(store: GalleryLockStore(persistence: MemoryGalleryLockPersistence())), settingsStore: settings)
         let originalGeneration = model.resetGeneration
         await model.purgeAndReset(defaults: defaults, domain: suite)
         XCTAssertNil(defaults.object(forKey: "onboarding.completed"))
         XCTAssertNil(defaults.object(forKey: "share.outputFormat"))
+        XCTAssertFalse(model.onboardingCompleted)
+        XCTAssertEqual(model.shareOutputFormat, GalleryOutputFormat.heic.rawValue)
         XCTAssertNotEqual(originalGeneration, model.resetGeneration)
         XCTAssertFalse(model.isResetting)
         XCTAssertNil(model.errorMessage)

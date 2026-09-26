@@ -50,6 +50,16 @@ final class GalleryDuressTests: XCTestCase {
         do { _ = try await reopened.unlock(); XCTFail("Incomplete rotation exposed a gallery") }
         catch PrivateMediaStore.StoreError.resetPending {}
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("vault.duress-old").path))
+        let ready = try Data(contentsOf: root.appendingPathComponent("vault/duress.ready"))
+        XCTAssertNil(ready.range(of: Data(plan.id.uuidString.utf8)))
+        let replacementKey = SymmetricKey(data: plan.replacementMediaKey)
+        XCTAssertEqual(try AES.GCM.open(AES.GCM.SealedBox(combined: ready), using: replacementKey,
+            authenticating: Data("NoctGallery.duress.ready.v1".utf8)), Data(plan.id.uuidString.utf8))
+        XCTAssertThrowsError(try AES.GCM.open(AES.GCM.SealedBox(combined: ready),
+            using: SymmetricKey(size: .bits256), authenticating: Data("NoctGallery.duress.ready.v1".utf8)))
+        // Released builds may have left the old UUID marker during a crashed
+        // transition; the new build must finish that committed action.
+        try Data(plan.id.uuidString.utf8).write(to: root.appendingPathComponent("vault/duress.ready"))
         keys.setDeleteFailure(false)
         try await reopened.applyDuress(plan)
         let remaining = try await reopened.unlock()
@@ -63,7 +73,8 @@ final class GalleryDuressTests: XCTestCase {
         let root = temporaryRoot()
         let suite = "NoctGalleryDuressTests-" + UUID().uuidString
         let preferences = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); preferences.removePersistentDomain(forName: suite) }
+        let settings = GallerySettingsStore(service: suite + ".settings", defaults: preferences)
+        defer { try? FileManager.default.removeItem(at: root); try? settings.purge(); preferences.removePersistentDomain(forName: suite) }
         let media = PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys())
         _ = try await Self.addItems(root: root, store: media)
         let credentials = GalleryLockStore(persistence: MemoryGalleryLockPersistence())
@@ -78,7 +89,8 @@ final class GalleryDuressTests: XCTestCase {
         preferences.set(true, forKey: "onboarding.completed")
         preferences.set(true, forKey: "photos.connected")
         let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root.appendingPathComponent("exports")),
-            privateStore: media, workStore: work, defaults: preferences, lock: lock, preferencesDomain: suite)
+            privateStore: media, workStore: work, defaults: preferences, lock: lock, preferencesDomain: suite,
+            settingsStore: settings)
         model.savePreset(name: "Old preset", profile: MetadataForge.randomProfile())
         await model.applyDuress(plan)
         XCTAssertNil(model.errorMessage)
@@ -87,6 +99,8 @@ final class GalleryDuressTests: XCTestCase {
         XCTAssertTrue(model.presets.isEmpty)
         XCTAssertFalse(preferences.bool(forKey: "onboarding.completed"))
         XCTAssertFalse(preferences.bool(forKey: "photos.connected"))
+        XCTAssertTrue(model.onboardingCompleted == false)
+        XCTAssertFalse(model.photosConnected)
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
         do { _ = try await work.write(Data([1]), extension: "jpg", session: oldSession); XCTFail("Stale work restored data after reset") }
         catch is CancellationError {}

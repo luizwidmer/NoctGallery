@@ -46,6 +46,29 @@ final class GalleryLockTests: XCTestCase {
         XCTAssertNil(try persistence.read()?.range(of: Data("482951".utf8)))
     }
 
+    @MainActor
+    func testEarlyPrimaryPINCannotClearDuressGuessCooldown() async throws {
+        let store = GalleryLockStore(persistence: MemoryGalleryLockPersistence())
+        _ = try await store.configure(mode: .biometricsAndPIN, pin: "482951", keys: [])
+        _ = try await store.setDuress(.reset, pin: "638204", decoyIDs: [])
+        let controller = GalleryLockController(store: store)
+        await controller.load()
+        XCTAssertEqual(controller.nextFactor, .biometrics)
+
+        for _ in 0..<4 { await controller.submitPIN("111111") }
+        // The ordinary PIN is known, but biometrics have not been passed.
+        // It must not clear the ledger for guesses at the early duress input.
+        await controller.submitPIN("482951")
+        XCTAssertFalse(controller.isUnlocked)
+        let record = try await store.load()
+        XCTAssertEqual(record?.failedAttempts, 5)
+        XCTAssertNotNil(record?.retryAfter)
+        do {
+            _ = try await store.attemptPIN("638204")
+            XCTFail("Duress guessing bypassed the cooldown")
+        } catch GalleryLockError.cooldown {}
+    }
+
     func testDuressPersistsBeforeReturningAndBecomesOnlyPIN() async throws {
         let persistence = MemoryGalleryLockPersistence()
         let store = GalleryLockStore(persistence: persistence)

@@ -30,13 +30,19 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published private(set) var isResetting = false
     @Published private(set) var resetNeedsRetry = false
     @Published private(set) var resetGeneration = UUID()
-    @Published var cameraMetadataMode: CameraMetadataMode { didSet { defaults.set(cameraMetadataMode.rawValue, forKey: "camera.metadataMode") } }
-    @Published var selectedPresetID: String { didSet { defaults.set(selectedPresetID, forKey: "camera.presetID") } }
-    @Published var randomIncludesEquipment: Bool { didSet { defaults.set(randomIncludesEquipment, forKey: "camera.randomEquipment") } }
-    @Published var randomIncludesLocation: Bool { didSet { defaults.set(randomIncludesLocation, forKey: "camera.randomGPS") } }
-    @Published var randomLocationRadius: Double { didSet { defaults.set(randomLocationRadius, forKey: "camera.randomRadius") } }
-    @Published var randomLocationCenter: DecoyLocation? { didSet { defaults.set(try? JSONEncoder().encode(randomLocationCenter), forKey: "camera.randomCenter") } }
-    @Published private(set) var presets: [DecoyPreset] = []
+    @Published var cameraMetadataMode: CameraMetadataMode { didSet { persistSettings() } }
+    @Published var selectedPresetID: String { didSet { persistSettings() } }
+    @Published var randomIncludesEquipment: Bool { didSet { persistSettings() } }
+    @Published var randomIncludesLocation: Bool { didSet { persistSettings() } }
+    @Published var randomLocationRadius: Double { didSet { persistSettings() } }
+    @Published var randomLocationCenter: DecoyLocation? { didSet { persistSettings() } }
+    @Published private(set) var presets: [DecoyPreset] = [] { didSet { persistSettings() } }
+    @Published var shareOutputFormat: String { didSet { persistSettings() } }
+    @Published var shareMaximumDimension: Int { didSet { persistSettings() } }
+    @Published var shareLossyQuality: Double { didSet { persistSettings() } }
+    @Published var onboardingCompleted: Bool { didSet { persistSettings() } }
+    @Published private(set) var photosConnected: Bool { didSet { persistSettings() } }
+    @Published private(set) var settingsLoadError: String?
     private var operationGeneration = UUID()
     let lock: GalleryLockController
     private var lockCleanup: Task<Void, Never>?
@@ -46,6 +52,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     let workStore: MediaWorkStore
     private let privateStore: PrivateMediaStore
     private let sanitizer: ImageSanitizer
+    private let settingsStore: GallerySettingsStore
+    private var settingsRecord: GallerySettingsRecord
+    private var suppressSettingsWrites = false
     private let defaults: UserDefaults
     private let preferencesDomain: String?
     private var started = false
@@ -57,7 +66,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
          sanitizer: ImageSanitizer = ImageSanitizer(),
          privateStore: PrivateMediaStore = PrivateMediaStore(),
          workStore: MediaWorkStore = MediaWorkStore(), defaults: UserDefaults = .standard,
-         lock: GalleryLockController = GalleryLockController(), preferencesDomain: String? = Bundle.main.bundleIdentifier) {
+         lock: GalleryLockController = GalleryLockController(), preferencesDomain: String? = Bundle.main.bundleIdentifier,
+         settingsStore providedSettingsStore: GallerySettingsStore? = nil) {
+        let store = providedSettingsStore ?? GallerySettingsStore(defaults: defaults)
+        let loaded: GallerySettingsRecord
+        let loadError: String?
+        do { loaded = try store.loadOrMigrate(); loadError = nil }
+        catch { loaded = .init(); loadError = error.localizedDescription }
         self.preferencesDomain = preferencesDomain
         self.lock = lock
         self.library = library
@@ -66,29 +81,79 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         self.privateStore = privateStore
         self.workStore = workStore
         self.defaults = defaults
+        self.settingsStore = store
+        self.settingsRecord = loaded
+        self.settingsLoadError = loadError
         self.authorizationStatus = library.authorizationStatus
-        self.cameraMetadataMode = CameraMetadataMode(rawValue: defaults.string(forKey: "camera.metadataMode") ?? "") ?? .clean
-        self.selectedPresetID = defaults.string(forKey: "camera.presetID") ?? ""
-        self.randomIncludesEquipment = defaults.object(forKey: "camera.randomEquipment") as? Bool ?? true
-        self.randomIncludesLocation = defaults.bool(forKey: "camera.randomGPS")
-        let radius = defaults.double(forKey: "camera.randomRadius")
-        self.randomLocationRadius = [0.5, 1, 5, 10, 25].contains(radius) ? radius : 5
-        if let data = defaults.data(forKey: "camera.randomCenter"), data.count < 4096,
-           let center = try? JSONDecoder().decode(DecoyLocation.self, from: data), center.isValid {
-            self.randomLocationCenter = center
-        } else { self.randomLocationCenter = nil }
+        self.cameraMetadataMode = loaded.cameraMetadataMode
+        self.selectedPresetID = loaded.selectedPresetID
+        self.randomIncludesEquipment = loaded.randomIncludesEquipment
+        self.randomIncludesLocation = loaded.randomIncludesLocation
+        self.randomLocationRadius = loaded.randomLocationRadius
+        self.randomLocationCenter = loaded.randomLocationCenter
+        self.presets = loaded.presets
+        self.shareOutputFormat = loaded.shareOutputFormat
+        self.shareMaximumDimension = loaded.shareMaximumDimension
+        self.shareLossyQuality = loaded.shareLossyQuality
+        self.onboardingCompleted = loaded.onboardingCompleted
+        self.photosConnected = loaded.photosConnected
         super.init()
-        if let data = defaults.data(forKey: "decoy.presets"), data.count <= 262_144,
-           let saved = try? JSONDecoder().decode([DecoyPreset].self, from: data) {
-            presets = Array(saved.filter { (try? $0.profile.validated()) != nil }.prefix(30))
-        }
     }
 
     deinit {
         if observesLibraryChanges { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
     }
 
-    var canReadLibrary: Bool { defaults.bool(forKey: "photos.connected") && (authorizationStatus == .authorized || authorizationStatus == .limited) }
+    private func persistSettings() {
+        guard !suppressSettingsWrites, settingsLoadError == nil else { return }
+        var next = settingsRecord
+        next.cameraMetadataMode = cameraMetadataMode
+        next.selectedPresetID = selectedPresetID
+        next.randomIncludesEquipment = randomIncludesEquipment
+        next.randomIncludesLocation = randomIncludesLocation
+        next.randomLocationRadius = randomLocationRadius
+        next.randomLocationCenter = randomLocationCenter
+        next.presets = presets
+        next.shareOutputFormat = shareOutputFormat
+        next.shareMaximumDimension = shareMaximumDimension
+        next.shareLossyQuality = shareLossyQuality
+        next.onboardingCompleted = onboardingCompleted
+        next.photosConnected = photosConnected
+        do { try settingsStore.save(next); settingsRecord = next }
+        catch {
+            settingsLoadError = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func retrySettingsLoad() {
+        do {
+            let loaded = try settingsStore.loadOrMigrate()
+            suppressSettingsWrites = true
+            settingsRecord = loaded
+            cameraMetadataMode = loaded.cameraMetadataMode
+            selectedPresetID = loaded.selectedPresetID
+            randomIncludesEquipment = loaded.randomIncludesEquipment
+            randomIncludesLocation = loaded.randomIncludesLocation
+            randomLocationRadius = loaded.randomLocationRadius
+            randomLocationCenter = loaded.randomLocationCenter
+            presets = loaded.presets
+            shareOutputFormat = loaded.shareOutputFormat
+            shareMaximumDimension = loaded.shareMaximumDimension
+            shareLossyQuality = loaded.shareLossyQuality
+            onboardingCompleted = loaded.onboardingCompleted
+            photosConnected = loaded.photosConnected
+            suppressSettingsWrites = false
+            settingsLoadError = nil
+            errorMessage = nil
+            resetGeneration = UUID()
+        } catch {
+            suppressSettingsWrites = false
+            settingsLoadError = error.localizedDescription
+        }
+    }
+
+    var canReadLibrary: Bool { photosConnected && (authorizationStatus == .authorized || authorizationStatus == .limited) }
     var isProcessing: Bool { exportingAssetID != nil }
     var selectedPreset: DecoyPreset? { presets.first { $0.id.uuidString == selectedPresetID } }
 
@@ -98,13 +163,11 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         let preset = DecoyPreset(name: trimmed.isEmpty ? profile.displayName : trimmed, profile: profile)
         presets.append(preset)
         presets = Array(presets.suffix(30))
-        defaults.set(try? JSONEncoder().encode(presets), forKey: "decoy.presets")
         selectedPresetID = preset.id.uuidString
     }
 
     func deletePreset(_ preset: DecoyPreset) {
         presets.removeAll { $0.id == preset.id }
-        defaults.set(try? JSONEncoder().encode(presets), forKey: "decoy.presets")
         if selectedPresetID == preset.id.uuidString { selectedPresetID = ""; cameraMetadataMode = .clean }
     }
 
@@ -123,7 +186,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         guard !started, !isResetting else { return }
         await lock.load()
         if let plan = lock.pendingDuress { await applyDuress(plan); return }
-        if defaults.bool(forKey: "reset.pending") { await purgeAndReset(); return }
+        guard settingsLoadError == nil else { return }
+        if settingsRecord.resetPending { await purgeAndReset(); return }
         started = true
         let generation = operationGeneration
         do {
@@ -147,7 +211,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         let status = await library.requestAuthorization()
         guard generation == operationGeneration else { return }
         authorizationStatus = status
-        defaults.set(status == .authorized || status == .limited, forKey: "photos.connected")
+        photosConnected = status == .authorized || status == .limited
         if canReadLibrary { beginObservingLibraryChangesIfNeeded(); reload() }
     }
 
@@ -174,6 +238,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             privateAssets = items
             privateUnlocked = true
             privateGeneration = UUID()
+            if canReadLibrary { reload() }
             return true
         } catch {
             if generation == operationGeneration { errorMessage = error.localizedDescription }
@@ -188,6 +253,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         privateGeneration = UUID()
         privateUnlocked = false
         privateAssets = []
+        assets = []
         let activeConversion = conversion
         activeConversion?.cancel()
         conversion = nil
@@ -220,6 +286,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
         await lockPrivate(lockApp: false)
         assets = []
+        suppressSettingsWrites = true
         presets = []
         if observesLibraryChanges { PHPhotoLibrary.shared().unregisterChangeObserver(self); observesLibraryChanges = false }
         do {
@@ -229,9 +296,17 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             cameraMetadataMode = .clean
             randomIncludesEquipment = true; randomIncludesLocation = false; randomLocationCenter = nil; randomLocationRadius = 5
             selectedPresetID = ""
+            shareOutputFormat = GalleryOutputFormat.heic.rawValue
+            shareMaximumDimension = 8_192
+            shareLossyQuality = 0.90
+            photosConnected = false
+            onboardingCompleted = plan.action == .retainDecoys
+            var replacementSettings = GallerySettingsRecord()
+            replacementSettings.onboardingCompleted = onboardingCompleted
+            try settingsStore.save(replacementSettings)
+            settingsRecord = replacementSettings
+            settingsLoadError = nil
             if let domain = preferencesDomain { defaults.removePersistentDomain(forName: domain) }
-            defaults.set(false, forKey: "photos.connected")
-            defaults.set(plan.action == .retainDecoys, forKey: "onboarding.completed")
             try await lock.finishDuress(plan, unlock: UIApplication.shared.applicationState == .active)
             hasTemporaryShareFiles = false
             errorMessage = nil
@@ -240,6 +315,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         } catch {
             errorMessage = "Unable to finish setup. Close and reopen Gallery to retry."
         }
+        suppressSettingsWrites = false
     }
 
     func thumbnail(for asset: PhotoAssetRecord, targetSize: CGSize) async -> UIImage? {
@@ -489,11 +565,20 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     func purgeAndReset(defaults override: UserDefaults? = nil, domain: String? = Bundle.main.bundleIdentifier) async {
         guard !isResetting else { return }
         let preferences = override ?? defaults
-        preferences.set(true, forKey: "reset.pending")
+        do {
+            var pending = settingsRecord
+            pending.resetPending = true
+            try settingsStore.save(pending)
+            settingsRecord = pending
+        } catch {
+            errorMessage = "Protected reset state is unavailable. Unlock the device and retry."
+            return
+        }
         resetNeedsRetry = true
         isResetting = true
+        suppressSettingsWrites = true
         await lockPrivate()
-        defer { isResetting = false }
+        defer { suppressSettingsWrites = false; isResetting = false }
         started = false
         if observesLibraryChanges { PHPhotoLibrary.shared().unregisterChangeObserver(self); observesLibraryChanges = false }
         sharePayload = nil
@@ -510,8 +595,14 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             cameraMetadataMode = .clean
             randomIncludesEquipment = true; randomIncludesLocation = false; randomLocationCenter = nil; randomLocationRadius = 5
             selectedPresetID = ""
+            shareOutputFormat = GalleryOutputFormat.heic.rawValue
+            shareMaximumDimension = 8_192
+            shareLossyQuality = 0.90
+            onboardingCompleted = false
+            photosConnected = false
+            try settingsStore.purge()
+            settingsRecord = .init()
             if let domain { preferences.removePersistentDomain(forName: domain) }
-            preferences.removeObject(forKey: "reset.pending")
             resetNeedsRetry = false
             errorMessage = nil
             resetGeneration = UUID()

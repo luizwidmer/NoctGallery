@@ -5,9 +5,6 @@ struct GallerySettingsView: View {
     @EnvironmentObject private var lock: GalleryLockController
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("share.outputFormat") private var outputFormat = GalleryOutputFormat.heic.rawValue
-    @AppStorage("share.maximumDimension") private var maximumDimension = 8_192
-    @AppStorage("share.lossyQuality") private var lossyQuality = 0.90
     @State private var showsResetConfirmation = false
     @State private var resetConfirmation = ""
 
@@ -33,21 +30,21 @@ struct GallerySettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Photo shares") {
-                    Picker("Output format", selection: $outputFormat) {
+                    Picker("Output format", selection: $model.shareOutputFormat) {
                         ForEach(GalleryOutputFormat.allCases) { format in
                             Text(format.title).tag(format.rawValue)
                         }
                     }
                     DisclosureGroup("Advanced Share Defaults") {
-                        Picker("Maximum edge", selection: $maximumDimension) {
+                        Picker("Maximum edge", selection: $model.shareMaximumDimension) {
                             Text("2,048 px").tag(2_048)
                             Text("4,096 px").tag(4_096)
                             Text("8,192 px").tag(8_192)
                         }
                         if selectedFormat != .png {
                             VStack(alignment: .leading, spacing: 8) {
-                                LabeledContent("Lossy quality", value: lossyQuality.formatted(.percent.precision(.fractionLength(0))))
-                                Slider(value: $lossyQuality, in: 0.65 ... 1.0, step: 0.01)
+                                LabeledContent("Lossy quality", value: model.shareLossyQuality.formatted(.percent.precision(.fractionLength(0))))
+                                Slider(value: $model.shareLossyQuality, in: 0.65 ... 1.0, step: 0.01)
                             }
                         }
                         Text("JPEG is used if HEIC encoding is unavailable.")
@@ -132,6 +129,6 @@ struct GallerySettingsView: View {
     }
 
     private var selectedFormat: GalleryOutputFormat {
-        GalleryOutputFormat(rawValue: outputFormat) ?? .heic
+        GalleryOutputFormat(rawValue: model.shareOutputFormat) ?? .heic
     }
 }
