@@ -7,15 +7,10 @@ struct AssetDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let asset: PhotoAssetRecord
     @State private var showsMetadata = false
-    @State private var editingPrivate = false
     @State private var confirmDelete = false
     @State private var copiedToPrivate = false
     @State private var savedMoveID: String?
-
-    private var configuration: ImageSanitizer.Configuration {
-        GalleryPreferences.configuration(format: model.shareOutputFormat, maximumDimension: model.shareMaximumDimension,
-            quality: model.shareLossyQuality)
-    }
+    @State private var showsOrganization = false
 
     var body: some View {
         ScrollView {
@@ -27,12 +22,21 @@ struct AssetDetailView: View {
                 .aspectRatio(previewAspectRatio, contentMode: .fit).frame(maxHeight: 560)
                 .background(.black.opacity(0.86)).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
+                if asset.originalKind == .livePhoto, asset.source == .privateLibrary {
+                    DisclosureGroup("Play Live Photo") {
+                        GalleryVideoPlayer(asset: asset, motion: true)
+                            .aspectRatio(previewAspectRatio, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 12) {
                     Label(asset.source == .photos ? "In Photos" : "In your private gallery",
                           systemImage: asset.source == .photos ? "photo.stack" : "lock.shield")
                         .font(.headline)
-                    LabeledContent(asset.source == .privateLibrary && asset.decoyProfile == nil ? "Added" : "Captured", value: asset.dateLabel)
+                    LabeledContent("Date", value: asset.dateLabel)
                     LabeledContent("Dimensions", value: asset.dimensionsLabel)
+                    if let originalKind = asset.originalKind { LabeledContent("Original", value: originalKind.title) }
                     if asset.kind == .video { LabeledContent("Duration", value: asset.durationLabel) }
                     if let profile = asset.decoyProfile {
                         LabeledContent("Metadata profile", value: profile.displayName)
@@ -45,17 +49,11 @@ struct AssetDetailView: View {
 
                 VStack(spacing: 12) {
                     Button {
-                        Task { await model.prepareShare(asset: asset, configuration: configuration, syntheticMetadata: asset.decoyProfile) }
+                        model.beginShare([asset], profile: asset.decoyProfile)
                     } label: {
-                        Label(asset.decoyProfile == nil ? "Clean & Share" : "Share with Saved Metadata", systemImage: "square.and.arrow.up")
+                        Label("Prepare to Share", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
-
-                    Button {
-                        editingPrivate = false
-                        showsMetadata = true
-                    } label: { Label("Edit Share Metadata", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity) }
-                        .buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("media.editMetadata")
 
                     if asset.source == .photos {
                         Button {
@@ -80,10 +78,21 @@ struct AssetDetailView: View {
                         Text("Copy saves a cleaned version and keeps the Photos original.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
+                        Button { showsOrganization = true } label: {
+                            Label("Albums & Tags", systemImage: "folder").frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered)
+                        Button {
+                            Task { await model.organize([asset.id], edit: .favorite(!(model.organization.items[asset.id]?.favorite ?? false))) }
+                        } label: {
+                            Label(model.organization.items[asset.id]?.favorite == true ? "Remove Favorite" : "Favorite", systemImage: model.organization.items[asset.id]?.favorite == true ? "heart.fill" : "heart")
+                                .frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered)
                         Menu {
-                            Button("Edit Saved Metadata", systemImage: "pencil") { editingPrivate = true; showsMetadata = true }
+                            if asset.originalKind == nil {
+                                Button("Edit Saved Metadata", systemImage: "pencil") { showsMetadata = true }
+                            }
                             Button("Share Without Metadata", systemImage: "shield.checkered") {
-                                Task { await model.prepareShare(asset: asset, configuration: configuration, syntheticMetadata: nil) }
+                                model.beginShare([asset])
                             }
                             Button("Delete Private Item", systemImage: "trash", role: .destructive) { confirmDelete = true }
                         } label: { Label("More Options", systemImage: "ellipsis.circle").frame(maxWidth: .infinity) }
@@ -101,19 +110,14 @@ struct AssetDetailView: View {
             }
             .padding(16).frame(maxWidth: 780).frame(maxWidth: .infinity)
         }
-        .navigationTitle(asset.kind.title).navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(asset.mediaTitle).navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showsOrganization) { GalleryOrganizeView(ids: [asset.id]) }
         .sheet(isPresented: $showsMetadata) {
             MetadataEditorView(profile: asset.decoyProfile ?? MetadataForge.randomProfile(), mediaKind: asset.kind,
-                               actionTitle: editingPrivate ? "Save Changes" : "Share Copy") { profile in
+                               actionTitle: "Save Changes") { profile in
                 Task {
-                    if editingPrivate {
-                        await model.saveToPrivate(asset: asset, profile: profile, replace: true)
-                        if !model.privateAssets.contains(where: { $0.id == asset.id }) { dismiss() }
-                    } else {
-                        // Allow the editor to dismiss before presenting the share sheet.
-                        try? await Task.sleep(for: .milliseconds(350))
-                        await model.prepareShare(asset: asset, configuration: configuration, syntheticMetadata: profile)
-                    }
+                    await model.saveToPrivate(asset: asset, profile: profile, replace: true)
+                    if !model.privateAssets.contains(where: { $0.id == asset.id }) { dismiss() }
                 }
             }
         }
@@ -133,6 +137,7 @@ struct AssetDetailView: View {
 private struct GalleryVideoPlayer: View {
     @EnvironmentObject private var model: GalleryViewModel
     let asset: PhotoAssetRecord
+    var motion = false
     @State private var player: AVPlayer?
     @State private var lease: URL?
     @State private var error: String?
@@ -145,7 +150,7 @@ private struct GalleryVideoPlayer: View {
         }
         .task(id: asset.id) {
             do {
-                let (loaded, url) = try await model.player(for: asset)
+                let (loaded, url) = try await model.player(for: asset, motion: motion)
                 if Task.isCancelled {
                     if let url { try? await model.workStore.remove(url) }
                     return

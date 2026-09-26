@@ -26,7 +26,7 @@ enum VideoSanitizer {
     }
 
     static func sanitize(asset: AVAsset, to url: URL, profile: SyntheticMetadataProfile?,
-                         includeAudio: Bool = true) async throws -> SanitizedVideo {
+                         includeAudio: Bool = true, edits: GalleryShareEdits = .init()) async throws -> SanitizedVideo {
         try Task.checkCancellation()
         if let profile { _ = try profile.validated() }
         if let fileAsset = asset as? AVURLAsset, fileAsset.url.isFileURL {
@@ -35,6 +35,10 @@ enum VideoSanitizer {
         }
         let duration = try await asset.load(.duration)
         guard duration.seconds.isFinite, duration.seconds > 0, duration.seconds <= 600 else { throw VideoError.unsupported }
+        _ = try edits.validated(duration: duration.seconds)
+        let start = CMTime(seconds: edits.trimStart, preferredTimescale: 60_000)
+        let end = CMTime(seconds: min(duration.seconds, edits.trimEnd ?? duration.seconds), preferredTimescale: 60_000)
+        let selectedRange = CMTimeRange(start: start, end: end)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard tracks.count == 1, let track = tracks.first else { throw VideoError.unsupported }
         let naturalSize = try await track.load(.naturalSize)
@@ -64,6 +68,7 @@ enum VideoSanitizer {
         composition.instructions = [instruction]
 
         let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = selectedRange
         let videoOutput = AVAssetReaderVideoCompositionOutput(videoTracks: [track],
             videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
         videoOutput.videoComposition = composition
@@ -85,7 +90,7 @@ enum VideoSanitizer {
 
         var audioOutput: AVAssetReaderTrackOutput?
         var audioInput: AVAssetWriterInput?
-        if includeAudio, let audioTrack = try await asset.loadTracks(withMediaType: .audio).first {
+        if includeAudio && !edits.removeAudio, let audioTrack = try await asset.loadTracks(withMediaType: .audio).first {
             let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [
                 AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMIsFloatKey: false,
                 AVLinearPCMBitDepthKey: 16, AVLinearPCMIsNonInterleaved: false,
@@ -104,7 +109,7 @@ enum VideoSanitizer {
 
         do {
             guard writer.startWriting(), reader.startReading() else { throw VideoError.conversionFailed }
-            writer.startSession(atSourceTime: .zero)
+            writer.startSession(atSourceTime: start)
             var videoFinished = false
             var audioFinished = audioInput == nil
             var frameCount = 0
@@ -115,6 +120,7 @@ enum VideoSanitizer {
                 if !videoFinished, videoInput.isReadyForMoreMediaData {
                     if let sample = videoOutput.copyNextSampleBuffer() {
                         guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw VideoError.conversionFailed }
+                        try edits.redact(buffer)
                         CVBufferRemoveAllAttachments(buffer)
                         guard adaptor.append(buffer, withPresentationTime: CMSampleBufferGetPresentationTimeStamp(sample)) else { throw VideoError.conversionFailed }
                         frameCount += 1
@@ -131,13 +137,14 @@ enum VideoSanitizer {
                 if !advanced { try await Task.sleep(for: .milliseconds(2)) }
             }
             guard frameCount > 0, reader.status == .completed else { throw VideoError.conversionFailed }
+            writer.endSession(atSourceTime: end)
             await writer.finishWriting()
             try Task.checkCancellation()
             guard writer.status == .completed else { throw VideoError.conversionFailed }
             try QuickTimeTimestamps.rewrite(url, date: profile?.capturedAt)
             try MediaFileProtection.protect(url)
             try await verify(url: url, profile: profile)
-            return SanitizedVideo(url: url, pixelWidth: width, pixelHeight: height, duration: duration.seconds)
+            return SanitizedVideo(url: url, pixelWidth: width, pixelHeight: height, duration: selectedRange.duration.seconds)
         } catch {
             reader.cancelReading()
             writer.cancelWriting()

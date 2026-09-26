@@ -20,7 +20,7 @@ final class PhotoLibraryService {
             case .imageUnavailable: "The original image data is unavailable."
             case .requestCancelled: "The media request was cancelled."
             case .originalChanged: "This item changed in Photos. Reopen it before moving."
-            case .unsupportedOriginal: "This item has a format, edits or extra media that Gallery cannot move intact yet. Use Copy to Private Gallery; the original will stay in Photos."
+            case .unsupportedOriginal: "This item contains edits or media components Gallery cannot preserve intact. Its Photos original will stay."
             case .deletionUnavailable: "Photos does not allow this original to be deleted."
             case .underlying(let message): message
             }
@@ -29,34 +29,52 @@ final class PhotoLibraryService {
 
     private let imageManager = PHCachingImageManager()
 
-    /// Move never goes through the sharing encoder. Only a complete, supported
-    /// single resource is eligible; Live Photos, RAW pairs and edits stay in Photos.
+    /// Keep every original component; edited or unknown resource sets fail closed.
     func originalFile(for record: PhotoAssetRecord, workStore: MediaWorkStore, session: UUID) async throws -> PreparedGalleryMedia {
         let asset = try unchangedAsset(for: record)
         guard asset.canPerform(.delete) else { throw LibraryError.deletionUnavailable }
-        let resources = PHAssetResource.assetResources(for: asset)
-        guard resources.count == 1, let resource = resources.first,
-              resource.type == .photo || resource.type == .video else { throw LibraryError.unsupportedOriginal }
-        let suffix: String
-        switch resource.uniformTypeIdentifier {
-        case UTType.jpeg.identifier: suffix = "jpg"
-        case UTType.png.identifier: suffix = "png"
-        case UTType.heic.identifier, UTType.heif.identifier: suffix = "heic"
-        case UTType.quickTimeMovie.identifier: suffix = "mov"
-        case UTType.mpeg4Movie.identifier: suffix = "mp4"
-        case "com.apple.m4v-video": suffix = "m4v"
-        default: throw LibraryError.unsupportedOriginal
+        let resources = PHAssetResource.assetResources(for: asset).sorted {
+            // Use the rendered companion for normal viewing of RAW + JPEG pairs.
+            func priority(_ item: PHAssetResource) -> Int {
+                if GalleryOriginalFormats.isRAW(item.uniformTypeIdentifier) { return 2 }
+                return item.type == .pairedVideo ? 3 : 0
+            }
+            return priority($0) < priority($1)
         }
-        let url = try await workStore.allocate(extension: suffix, session: session)
+        func role(_ resource: PHAssetResource) throws -> GalleryResourceRole {
+            switch resource.type {
+            case .photo: .photo
+            case .video: .video
+            case .alternatePhoto: .alternatePhoto
+            case .pairedVideo: .pairedVideo
+            default: throw LibraryError.unsupportedOriginal
+            }
+        }
+        let originalKind = try GalleryOriginalFormats.classify(resources.map { (try role($0), $0.uniformTypeIdentifier) })
+        guard asset.mediaSubtypes.contains(.photoLive) == (originalKind == .livePhoto) else { throw LibraryError.unsupportedOriginal }
+        var originals: [GalleryOriginalResource] = []
+        var allocated: [URL] = []
         do {
-            try await OriginalResourceWriter.write(resource, to: url)
-            try Task.checkCancellation()
+            var total = 0
+            for resource in resources {
+                guard let suffix = GalleryOriginalFormats.suffix(for: resource.uniformTypeIdentifier) else { throw LibraryError.unsupportedOriginal }
+                let url = try await workStore.allocate(extension: suffix, session: session)
+                allocated.append(url)
+                try await OriginalResourceWriter.write(resource, to: url)
+                try Task.checkCancellation()
+                let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size > 0, size <= PrivateMediaStore.maximumBytes - total else { throw PrivateMediaStore.StoreError.mediaTooLarge }
+                total += size
+                originals.append(.init(url: url, fileExtension: suffix, role: try role(resource), typeIdentifier: resource.uniformTypeIdentifier))
+            }
             let thumbnail = try await thumbnail(for: record, targetSize: CGSize(width: 600, height: 600))
             guard let preview = thumbnail.jpegData(compressionQuality: 0.85) else { throw LibraryError.imageUnavailable }
             _ = try unchangedAsset(for: record)
-            return PreparedGalleryMedia(url: url, fileExtension: suffix, kind: record.kind,
-                width: record.pixelWidth, height: record.pixelHeight, duration: record.duration, thumbnail: preview)
-        } catch { try? await workStore.remove(url); throw error }
+            guard let first = originals.first else { throw LibraryError.unsupportedOriginal }
+            return PreparedGalleryMedia(url: first.url, fileExtension: first.fileExtension, kind: record.kind,
+                width: record.pixelWidth, height: record.pixelHeight, duration: record.duration, thumbnail: preview,
+                resources: originals, originalKind: originalKind, originalCreationDate: record.creationDate)
+        } catch { for url in allocated { try? await workStore.remove(url) }; throw error }
     }
 
     func deleteOriginal(_ record: PhotoAssetRecord) async throws {
@@ -109,7 +127,8 @@ final class PhotoLibraryService {
                     pixelWidth: asset.pixelWidth,
                     pixelHeight: asset.pixelHeight,
                     kind: asset.mediaType == .video ? .video : .photo,
-                    duration: asset.duration
+                    duration: asset.duration,
+                    originalKind: asset.mediaSubtypes.contains(.photoLive) ? .livePhoto : nil
                 )
             )
         }

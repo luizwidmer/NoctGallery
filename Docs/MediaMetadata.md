@@ -4,6 +4,10 @@ Reviewed 2026-09-17. These are synthetic profiles, not authentic camera exports 
 
 ## What is written
 
+The sharing editor offers opaque covers and on-device face/text suggestions, plus video trim and mute. Suggestions require confirmation and do not track moving subjects. Covers are applied to upright pixels before encoding. Review Export displays the actual output file, its dimensions/size/audio state, bounded metadata properties and removed/changed fields. Source properties are held only for the active review, never indexed or saved as search data.
+
+Move to Private is a separate lossless operation: unedited Live Photo still/motion and RAW/photo companions have an authenticated encrypted manifest, and every byte of every component is verified before requesting Photos deletion. Unsupported or edited combinations stay in Photos. Sharing these originals produces a rendered still; original resources are not modified by sharing. See [PHAssetResource](https://developer.apple.com/documentation/photos/phassetresource) and [alternate photo resources](https://developer.apple.com/documentation/photos/phassetresourcetype/alternatephoto).
+
 A photo is decoded, orientation-normalized and encoded from a fresh sRGB raster. Clean output omits optional source metadata. A decoy can add TIFF make/model/date, EXIF exposure/ISO/aperture/focal length/date and offset, plus optional GPS. Turning off **Include camera metadata** omits make, model, exposure and lens fields while retaining the chosen date and optional GPS. Serial numbers, owner names, firmware strings, MakerNotes, comments and source metadata are never copied.
 
 A movie is decoded and re-encoded to H.264/AAC MOV. Its optional decoy tags are make, model, creation date and ISO 6709 coordinates. Photo exposure/lens controls are hidden for video, because those tags are not written into the movie. QuickTime movie/track/media creation and modification fields are cleared for clean exports or set to the selected date. The first video and optional first audio track are retained; extra tracks and opaque metadata are not remuxed.

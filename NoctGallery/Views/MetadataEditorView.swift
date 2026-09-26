@@ -115,7 +115,7 @@ struct MetadataEditorView: View {
                 }
                 Section {
                     Button("Randomize Profile", systemImage: "shuffle") { profile = MetadataForge.randomProfile(includeLocation: profile.location != nil, includeEquipment: profile.includesEquipment) }
-                    Button("Save as Camera Preset…", systemImage: "square.and.arrow.down") {
+                Button("Save Preset…", systemImage: "square.and.arrow.down") {
                         presetName = profile.displayName
                         showsPresetName = true
                     }

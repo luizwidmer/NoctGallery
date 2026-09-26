@@ -17,8 +17,10 @@ struct PhotoAssetRecord: Identifiable, Hashable, Codable, Sendable {
     var duration: Double = 0
     var source: GallerySource = .photos
     var decoyProfile: SyntheticMetadataProfile? = nil
+    var originalKind: GalleryOriginalKind? = nil
 
     var id: String { localIdentifier }
+    var mediaTitle: String { originalKind?.title ?? kind.title }
 
     var dimensionsLabel: String {
         "\(pixelWidth) × \(pixelHeight)"
@@ -66,4 +68,5 @@ struct SharePayload: Identifiable, Sendable {
     let id = UUID()
     let url: URL
     let syntheticProfile: SyntheticMetadataProfile?
+    var items: [GalleryReviewedExport] = []
 }

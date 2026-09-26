@@ -64,7 +64,7 @@ struct GallerySettingsView: View {
                             Task { await model.purgeTemporaryExports() }
                         }
                     }
-                    Text("Share files are protected, excluded from backups and removed after sharing.")
+                    Text("Temporary copies are protected and removed when you close export review or lock Gallery.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

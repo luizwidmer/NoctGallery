@@ -60,9 +60,8 @@ struct RootView: View {
         .sheet(isPresented: $lock.showsProtectionSettings) {
             NavigationStack { GalleryProtectionView() }
         }
-        .sheet(item: $model.sharePayload, onDismiss: model.finishShare) { payload in
-            ShareSheet(url: payload.url, completion: model.finishShare)
-                .presentationDetents([.medium, .large])
+        .sheet(item: $model.shareRequest, onDismiss: model.finishShare) { request in
+            GalleryShareFlowView(request: request)
         }
         .alert("Noct Gallery", isPresented: errorBinding) {
             Button("OK") { model.errorMessage = nil }
@@ -81,7 +80,7 @@ struct RootView: View {
 
     private var errorBinding: Binding<Bool> {
         Binding(
-            get: { model.errorMessage != nil },
+            get: { model.errorMessage != nil && model.shareRequest == nil },
             set: { if !$0 { model.errorMessage = nil } }
         )
     }

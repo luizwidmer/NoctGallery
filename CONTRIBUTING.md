@@ -1,8 +1,8 @@
 # Contributing to Noct Gallery
 
-Contributions should preserve the app's no-vault design: PhotoKit remains the
-source of truth, and private copies are created only as bounded temporary share
-exports.
+Contributions should preserve the app's local encrypted-vault design. Photos
+originals are changed only by an explicit, verified Move to Private operation;
+sharing creates bounded temporary exports.
 
 ## Build and test
 
@@ -11,11 +11,16 @@ the commands documented in `README.md`.
 
 ## Change requirements
 
-- Never persist original media in app-managed storage.
+- Encrypt every persistent app field, including original media components,
+  thumbnails, manifests, album names and tags. Keep keys separate from files.
+- Verify every original resource before requesting Photos deletion; reject
+  unsupported combinations without dropping components.
 - Strip source metadata and filenames from clean exports.
 - Keep decoy metadata explicit and opt-in.
 - Bound decode size, pixel count, output dimensions, and temporary-file life.
-- Add tests for sanitization, metadata generation, and cleanup behavior.
+- Add focused tests for sanitization, resource preservation, redaction,
+  encrypted organization, lock/duress transitions and cleanup behavior.
+- Keep practice mode isolated from real media and credentials.
 - Update `README.md` and `SECURITY.md` when privacy boundaries change.
 - Keep signing data, local Photos content, and generated build output out of Git.
 

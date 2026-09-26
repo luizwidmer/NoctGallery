@@ -55,16 +55,17 @@ Tests use isolated temporary storage and in-memory credential stores. A Simulato
 | --- | --- |
 | Private library | Browse Photos, copy cleaned media, or move supported originals into encrypted storage. |
 | Private camera | Capture directly into Gallery, without saving to Apple Photos. |
-| Deliberate sharing | Export newly encoded media with clean, chosen, or synthetic metadata. |
+| Deliberate sharing | Cover sensitive details, trim or mute videos, then inspect the actual export and its metadata before sharing. |
+| Organization | Encrypted albums, favorites and tags, with batch sharing, organization, copy and deletion. |
 | Metadata editing | Save presets and choose optional coordinates by map, search, or numeric input. |
 | App protection | Require a PIN, biometrics, a compatible physically connected USB FIDO2 key, or every selected factor. |
-| Duress actions | Reset local storage or retain selected items under a newly rotated key. |
+| Duress actions | Reset local storage or retain selected items under a newly rotated key; rehearse with isolated sample media. |
 
 ### Move or copy
 
 **Move to Private Gallery** preserves the original file bytes and embedded metadata, verifies the encrypted copy, then asks Photos to delete its original. If saving, verification or deletion fails, the Photos original stays. Cancelling deletion keeps the encrypted copy; the same screen offers **Remove Photos Original** to retry without importing another copy.
 
-Moves support single-resource JPEG, PNG, HEIC/HEIF, MOV, MP4 and M4V media up to 1 GB. Live Photos, RAW pairs, edited/multipart assets and unsupported formats remain in Photos rather than silently losing a component. **Copy to Private Gallery** keeps the Photos source and uses the existing cleaned/re-encoded import.
+Moves support JPEG, PNG, HEIC/HEIF, MOV, MP4, M4V, system-recognized RAW images, RAW/photo pairs and Live Photos, up to 1 GB across all components. Every component is encrypted and compared with its original before Photos deletion. Live Photo motion plays from the private detail screen. RAW/photo pairs use the rendered companion for ordinary viewing. Edited assets and unknown resource combinations remain in Photos rather than silently losing a component. **Copy to Private Gallery** keeps the Photos source and uses a cleaned/re-encoded import.
 
 Photos deletion can sync through iCloud Photos and leaves the item in Recently Deleted for up to 30 days. Clear that album in Photos for immediate permanent removal. Gallery does not promise to erase external copies or backups.
 
@@ -79,6 +80,10 @@ Metadata presets include 21 camera models across eight manufacturers and
 vary dates and time zones, add an optional GPS area, omit camera identity, or
 strip optional metadata entirely. Maps uses an explicit place search; Gallery
 does not request your current location.
+
+**Prepare to Share** lets you draw opaque covers, optionally use on-device face/text suggestions, and choose saved metadata presets. Video covers stay at fixed positions throughout the selected clip; trim and audio removal are optional. Suggestions can miss faces, text or plates and must be reviewed. The next screen plays or displays the encoded output, shows its size and metadata, and compares removed/changed fields. Batch sharing handles up to 20 copies, with a 512 MB combined export limit. Each item needs its own review for sensitive visible content.
+
+Albums, tags and favorites are encrypted in the vault and available only while unlocked. Search includes album names and tags, without a system search index or stored OCR transcripts. Batch organization and deletion accept up to 500 selected items. Deleting an album keeps its media.
 
 ### App protection
 
@@ -98,13 +103,15 @@ When a duress action retains selected items, Gallery re-encrypts them with a
 new storage key and makes the duress PIN the sole ordinary unlock PIN.
 Interrupted actions resume before unlocking.
 
+Duress practice is implemented but temporarily hidden from the app. Its isolated sample vault and tests remain available in the code; there are no navigation entry points.
+
 <a id="important-boundaries"></a>
 
 ## Security and privacy
 
 The private gallery is on-device storage, excluded from backup. Gallery has no sync, account or key recovery service. Forgotten required credentials require a destructive reset. Biometric checks use the device's enrolled biometrics without a passcode fallback; protect the device passcode and enrollment settings.
 
-A private camera still uses Apple's camera hardware, permission system and capture indicators. It bypasses the Photos save workflow, not iOS security. A clean conversion changes encoding and may reduce resolution, frame rate, dynamic range and audio channels; it is not an archival copy of the original. Live Photo paired motion, RAW editing, depth, spatial video, subtitles and additional audio tracks are not preserved.
+A private camera still uses Apple's camera hardware, permission system and capture indicators. It bypasses the Photos save workflow, not iOS security. A clean conversion changes encoding and may reduce resolution, frame rate, dynamic range and audio channels; it is not an archival copy of the original. Shared copies of Live Photos/RAW items are rendered stills; their original components remain in the vault. RAW editing, depth, spatial video, subtitles and additional audio tracks are not preserved in clean exports.
 
 PhotoKit may download iCloud-backed media. Maps and place search contact Apple. StoreKit handles optional tips and review prompts. Gallery has no developer-operated upload service, analytics or advertising. Sharing gives the selected destination a decrypted file. Temporary media is protected, excluded from backup, and cleared after use, on lock and at launch.
 

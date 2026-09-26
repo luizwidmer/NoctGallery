@@ -91,6 +91,19 @@ final class VideoSanitizerTests: XCTestCase {
         _ = try await VideoSanitizer.sanitize(asset: composition, to: silent, profile: nil, includeAudio: false)
         let silentTracks = try await AVURLAsset(url: silent).loadTracks(withMediaType: .audio)
         XCTAssertTrue(silentTracks.isEmpty)
+
+        let trimmed = directory.appendingPathComponent("trimmed.mov")
+        _ = try await VideoSanitizer.sanitize(asset: composition, to: trimmed, profile: nil,
+            edits: .init(trimStart: 0.2, trimEnd: 0.7, removeAudio: true))
+        let inspected = try await GalleryExportInspection.inspect(url: trimmed, kind: .video)
+        XCTAssertEqual(inspected.duration, 0.5, accuracy: 0.06)
+        XCTAssertFalse(inspected.hasAudio)
+        let trimmedAudio = directory.appendingPathComponent("trimmed-audio.mov")
+        _ = try await VideoSanitizer.sanitize(asset: composition, to: trimmedAudio, profile: nil,
+            edits: .init(trimStart: 0.2, trimEnd: 0.7))
+        let audible = try await GalleryExportInspection.inspect(url: trimmedAudio, kind: .video)
+        XCTAssertEqual(audible.duration, 0.5, accuracy: 0.06)
+        XCTAssertTrue(audible.hasAudio)
     }
 
     func testRotationBecomesPixelsAndCancellationLeavesNoCopy() async throws {
@@ -106,6 +119,21 @@ final class VideoSanitizerTests: XCTestCase {
         let tracks = try await AVURLAsset(url: output).loadTracks(withMediaType: .video)
         let transform = try await XCTUnwrap(tracks.first).load(.preferredTransform)
         XCTAssertEqual(transform, .identity)
+
+        let redacted = directory.appendingPathComponent("redacted.mov")
+        _ = try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: redacted, profile: nil,
+            edits: .init(redactions: [.init(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.25))], trimStart: 0.2, trimEnd: 0.8))
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: redacted))
+        let frame = try await generator.image(at: CMTime(seconds: 0.3, preferredTimescale: 600)).image
+        let context = try XCTUnwrap(CGContext(data: nil, width: frame.width, height: frame.height, bitsPerComponent: 8,
+            bytesPerRow: frame.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+        context.draw(frame, in: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))
+        let samples = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        let topLeft = (2 * frame.width + 2) * 4
+        let bottomRight = ((frame.height - 3) * frame.width + frame.width - 3) * 4
+        XCTAssertLessThan(samples[topLeft], 5, "The cover follows upright coordinates after rotation")
+        XCTAssertGreaterThan(samples[bottomRight], 20, "Uncovered content must survive")
         let cancelled = directory.appendingPathComponent("cancelled.mov")
         let task = Task {
             try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: cancelled, profile: nil)

@@ -56,9 +56,11 @@ struct ImageSanitizer: Sendable {
     func sanitize(
         _ sourceData: Data,
         configuration: Configuration = Configuration(),
-        syntheticMetadata: SyntheticMetadataProfile? = nil
+        syntheticMetadata: SyntheticMetadataProfile? = nil,
+        edits: GalleryShareEdits = .init()
     ) throws -> SanitizedImage {
         let configuration = try configuration.validated()
+        _ = try edits.validated()
         if let syntheticMetadata { _ = try syntheticMetadata.validated() }
         guard !sourceData.isEmpty else { throw SanitizationError.emptyInput }
         guard sourceData.count <= configuration.maximumEncodedBytes else {
@@ -92,7 +94,7 @@ struct ImageSanitizer: Sendable {
         guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
             throw SanitizationError.decodeFailed
         }
-        let normalized = try normalize(decoded)
+        let normalized = try edits.redact(normalize(decoded))
         let encoded = try encode(
             normalized,
             format: configuration.outputFormat,

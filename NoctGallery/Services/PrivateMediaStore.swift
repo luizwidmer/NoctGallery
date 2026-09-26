@@ -75,6 +75,7 @@ actor PrivateMediaStore {
         let fileExtension: String
         let byteCount: Int
         let chunkCount: Int
+        var resources: [GalleryStoredResource]? = nil
     }
 
     static let maximumBytes = 1_024 * 1_024 * 1_024
@@ -102,7 +103,7 @@ actor PrivateMediaStore {
             || manager.fileExists(atPath: duressOld.path) { throw StoreError.resetPending }
         try MediaFileProtection.prepareDirectory(root)
         let hasItems = try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .contains { UUID(uuidString: $0.lastPathComponent) != nil }
+            .contains { UUID(uuidString: $0.lastPathComponent) != nil || $0.lastPathComponent == "organization.sealed" }
         let data = try keys.loadOrCreate(allowCreate: !hasItems)
         master = SymmetricKey(data: data)
         session = UUID()
@@ -171,52 +172,133 @@ actor PrivateMediaStore {
         return try open(itemDirectory(id).appendingPathComponent("thumbnail.sealed"), key: key, context: id + ":thumbnail", limit: 4_194_332)
     }
 
-    func materialize(id: String, to url: URL, session expected: UUID) throws {
+    func saveOriginal(resources: [GalleryOriginalResource], originalKind: GalleryOriginalKind?,
+                      creationDate: Date?, kind: GalleryMediaKind, width: Int, height: Int,
+                      duration: Double, thumbnail: Data, session expected: UUID) throws -> PhotoAssetRecord {
+        try requireSession(expected)
+        guard !resources.isEmpty, resources.count <= 3, width > 0, height > 0,
+              duration.isFinite, duration >= 0, thumbnail.count <= 4_194_304,
+              (kind == .video) == (resources.first?.role == .video),
+              creationDate?.timeIntervalSince1970.isFinite != false,
+              try GalleryOriginalFormats.classify(resources.map { ($0.role, $0.typeIdentifier) }) == originalKind else { throw StoreError.invalidRecord }
+        var total = 0
+        let manifest = try resources.map { resource -> GalleryStoredResource in
+            guard GalleryOriginalFormats.suffix(for: resource.typeIdentifier) == resource.fileExtension else { throw StoreError.invalidRecord }
+            let attributes = try manager.attributesOfItem(atPath: resource.url.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = (attributes[.size] as? NSNumber)?.intValue,
+                  size > 0, size <= Self.maximumBytes - total else { throw StoreError.mediaTooLarge }
+            total += size
+            return GalleryStoredResource(id: UUID().uuidString.lowercased(), role: resource.role,
+                fileExtension: resource.fileExtension, typeIdentifier: resource.typeIdentifier,
+                byteCount: size, chunkCount: (size + Self.chunkSize - 1) / Self.chunkSize)
+        }
+        let id = UUID().uuidString.lowercased()
+        let asset = PhotoAssetRecord(localIdentifier: id, creationDate: creationDate ?? Date(), modificationDate: nil,
+            pixelWidth: width, pixelHeight: height, kind: kind, duration: duration, source: .privateLibrary, originalKind: originalKind)
+        let first = manifest[0]
+        let record = StoredRecord(version: 2, asset: asset, fileExtension: first.fileExtension,
+            byteCount: first.byteCount, chunkCount: first.chunkCount, resources: manifest)
+        let staging = root.appendingPathComponent("staging-" + id, isDirectory: true)
+        try MediaFileProtection.prepareDirectory(staging)
+        do {
+            let key = try itemKey(id)
+            for (source, resource) in zip(resources, manifest) {
+                let input = try FileHandle(forReadingFrom: source.url)
+                defer { try? input.close() }
+                let target = staging.appendingPathComponent(resource.id + ".sealed")
+                try MediaFileProtection.createFile(target)
+                let output = try FileHandle(forWritingTo: target)
+                defer { try? output.close() }
+                var remaining = resource.byteCount
+                for index in 0..<resource.chunkCount {
+                    try Task.checkCancellation()
+                    var plain = try input.read(upToCount: min(Self.chunkSize, remaining)) ?? Data()
+                    defer { plain.resetBytes(in: plain.startIndex..<plain.endIndex) }
+                    guard plain.count == min(Self.chunkSize, remaining) else { throw StoreError.invalidRecord }
+                    try output.write(contentsOf: AES.GCM.seal(plain, using: key,
+                        authenticating: resourceAAD(id, resource, index)).combined!)
+                    remaining -= plain.count
+                }
+                guard remaining == 0, try input.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
+                try output.synchronize()
+            }
+            try seal(JSONEncoder().encode(record), to: staging.appendingPathComponent("record.sealed"), key: key, context: id + ":record")
+            try seal(thumbnail, to: staging.appendingPathComponent("thumbnail.sealed"), key: key, context: id + ":thumbnail")
+            try manager.moveItem(at: staging, to: itemDirectory(id))
+            return asset
+        } catch { try? manager.removeItem(at: staging); throw error }
+    }
+
+    func materialize(id: String, resourceID: String? = nil, to url: URL, session expected: UUID) throws {
         try requireSession(expected)
         let record = try record(id: id)
-        let input = try FileHandle(forReadingFrom: itemDirectory(id).appendingPathComponent("media.sealed"))
+        let resources = mediaResources(record)
+        guard let resource = resourceID == nil ? resources.first : resources.first(where: { $0.id == resourceID }) else { throw StoreError.invalidRecord }
+        let input = try encryptedInput(id: id, resource: resource)
         defer { try? input.close() }
         try MediaFileProtection.createFile(url)
         do {
             let output = try FileHandle(forWritingTo: url)
             defer { try? output.close() }
             let key = try itemKey(id)
-            var remaining = record.byteCount
-            for index in 0..<record.chunkCount {
+            var remaining = resource.byteCount
+            for index in 0..<resource.chunkCount {
                 try Task.checkCancellation()
                 let bytes = min(Self.chunkSize, remaining)
                 let sealed = try input.read(upToCount: bytes + 28) ?? Data()
                 guard sealed.count == bytes + 28 else { throw StoreError.invalidRecord }
-                let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key, authenticating: aad(id, index, record.byteCount))
+                var plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key, authenticating: resourceAAD(id, resource, index))
+                defer { plain.resetBytes(in: plain.startIndex..<plain.endIndex) }
                 guard plain.count == bytes else { throw StoreError.invalidRecord }
                 try output.write(contentsOf: plain)
                 remaining -= bytes
             }
             guard remaining == 0, try input.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
+            try output.synchronize()
         } catch { try? manager.removeItem(at: url); throw error }
     }
 
     func fileExtension(id: String) throws -> String { try record(id: id).fileExtension }
+
+    func resources(id: String) throws -> [GalleryStoredResource] { mediaResources(try record(id: id)) }
 
     /// Authenticate every saved byte and compare it with the imported original
     /// before Photos deletion. This check creates no plaintext output file.
     func verifySavedCopy(id: String, original: URL, session expected: UUID) throws {
         try requireSession(expected)
         let record = try record(id: id)
+        guard mediaResources(record).count == 1 else { throw StoreError.invalidRecord }
+        try verifyResource(id: id, resource: mediaResources(record)[0], original: original)
+    }
+
+    func verifyOriginal(id: String, originals: [GalleryOriginalResource], session expected: UUID) throws {
+        try requireSession(expected)
+        let stored = mediaResources(try record(id: id))
+        guard stored.count == originals.count else { throw StoreError.invalidRecord }
+        for (resource, original) in zip(stored, originals) {
+            guard resource.fileExtension == original.fileExtension,
+                  resource.id.isEmpty || (resource.role == original.role && resource.typeIdentifier == original.typeIdentifier) else { throw StoreError.invalidRecord }
+            try verifyResource(id: id, resource: resource, original: original.url)
+        }
+    }
+
+    private func verifyResource(id: String, resource: GalleryStoredResource, original: URL) throws {
         _ = try thumbnail(id: id)
         let source = try FileHandle(forReadingFrom: original)
         defer { try? source.close() }
-        let encrypted = try FileHandle(forReadingFrom: itemDirectory(id).appendingPathComponent("media.sealed"))
+        let encrypted = try encryptedInput(id: id, resource: resource)
         defer { try? encrypted.close() }
         let key = try itemKey(id)
-        var remaining = record.byteCount
-        for index in 0..<record.chunkCount {
+        var remaining = resource.byteCount
+        for index in 0..<resource.chunkCount {
             try Task.checkCancellation()
             let count = min(Self.chunkSize, remaining)
             let sealed = try encrypted.read(upToCount: count + 28) ?? Data()
             guard sealed.count == count + 28 else { throw StoreError.invalidRecord }
-            let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key,
-                                        authenticating: aad(id, index, record.byteCount))
+            var plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key,
+                                        authenticating: resourceAAD(id, resource, index))
+            defer { plain.resetBytes(in: plain.startIndex..<plain.endIndex) }
             guard plain.count == count, plain == (try source.read(upToCount: count)) else { throw StoreError.invalidRecord }
             remaining -= count
         }
@@ -224,9 +306,85 @@ actor PrivateMediaStore {
               try encrypted.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
     }
 
-    func delete(id: String) throws {
+    func delete(id: String, session expected: UUID? = nil) throws {
+        if let expected { try requireSession(expected) }
         _ = try record(id: id)
+        var organization = try organization()
         try manager.removeItem(at: itemDirectory(id))
+        organization.items.removeValue(forKey: id)
+        try saveOrganization(organization)
+    }
+
+    func organization() throws -> GalleryOrganization {
+        guard master != nil else { throw StoreError.locked }
+        let url = root.appendingPathComponent("organization.sealed")
+        guard manager.fileExists(atPath: url.path) else { return .init() }
+        var data = try open(url, key: organizationKey(), context: "NoctGallery.organization.v1", limit: 4_194_332)
+        defer { data.resetBytes(in: data.startIndex..<data.endIndex) }
+        return try JSONDecoder().decode(GalleryOrganization.self, from: data).validated()
+    }
+
+    func saveAlbum(id: UUID? = nil, name: String, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        guard GalleryOrganization.validName(name) else { throw StoreError.invalidRecord }
+        var value = try organization()
+        if let id {
+            guard let index = value.albums.firstIndex(where: { $0.id == id }) else { throw StoreError.invalidRecord }
+            value.albums[index].name = name
+        } else { value.albums.append(GalleryAlbum(id: UUID(), name: name)) }
+        try saveOrganization(value)
+        return value
+    }
+
+    func deleteAlbum(id: UUID, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        value.albums.removeAll { $0.id == id }
+        for key in Array(value.items.keys) { value.items[key]?.albumIDs.remove(id) }
+        try saveOrganization(value)
+        return value
+    }
+
+    func organize(ids: Set<String>, edit: GalleryOrganizationEdit, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        guard !ids.isEmpty, ids.count <= 500 else { throw StoreError.invalidRecord }
+        var value = try organization()
+        for id in ids {
+            _ = try record(id: id)
+            var item = value.items[id] ?? .init()
+            switch edit {
+            case .favorite(let flag): item.favorite = flag
+            case .tags(let tags): item.tags = tags
+            case .addToAlbum(let album):
+                guard value.albums.contains(where: { $0.id == album }) else { throw StoreError.invalidRecord }
+                item.albumIDs.insert(album)
+            case .removeFromAlbum(let album): item.albumIDs.remove(album)
+            }
+            value.items[id] = item
+        }
+        try saveOrganization(value)
+        return value
+    }
+
+    func copyOrganization(from oldID: String, to newID: String, session expected: UUID) throws {
+        try requireSession(expected)
+        _ = try record(id: newID)
+        var value = try organization()
+        value.items[newID] = value.items[oldID]
+        try saveOrganization(value)
+    }
+
+    private func organizationKey() throws -> SymmetricKey {
+        guard let master else { throw StoreError.locked }
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: master, salt: Data("organization".utf8),
+            info: Data("NoctGallery.organization.v1".utf8), outputByteCount: 32)
+    }
+
+    private func saveOrganization(_ value: GalleryOrganization) throws {
+        var data = try JSONEncoder().encode(value.validated())
+        defer { data.resetBytes(in: data.startIndex..<data.endIndex) }
+        guard data.count <= 4_194_304 else { throw StoreError.invalidRecord }
+        try seal(data, to: root.appendingPathComponent("organization.sealed"), key: organizationKey(), context: "NoctGallery.organization.v1")
     }
 
     func reset() throws {
@@ -308,25 +466,29 @@ actor PrivateMediaStore {
         try MediaFileProtection.prepareDirectory(destination)
         try seal(JSONEncoder().encode(record), to: destination.appendingPathComponent("record.sealed"), key: newKey, context: id + ":record")
         try seal(thumbnail(id: id), to: destination.appendingPathComponent("thumbnail.sealed"), key: newKey, context: id + ":thumbnail")
-        let input = try FileHandle(forReadingFrom: itemDirectory(id).appendingPathComponent("media.sealed"))
-        defer { try? input.close() }
-        let target = destination.appendingPathComponent("media.sealed")
-        try MediaFileProtection.createFile(target)
-        let output = try FileHandle(forWritingTo: target)
-        defer { try? output.close() }
-        var remaining = record.byteCount
-        for index in 0..<record.chunkCount {
-            let bytes = min(Self.chunkSize, remaining)
-            let encrypted = try input.read(upToCount: bytes + 28) ?? Data()
-            guard encrypted.count == bytes + 28 else { throw StoreError.invalidRecord }
-            let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: oldKey,
-                authenticating: aad(id, index, record.byteCount))
-            guard plain.count == bytes else { throw StoreError.invalidRecord }
-            try output.write(contentsOf: AES.GCM.seal(plain, using: newKey, authenticating: aad(id, index, record.byteCount)).combined!)
-            remaining -= bytes
+        for resource in mediaResources(record) {
+            let input = try encryptedInput(id: id, resource: resource)
+            defer { try? input.close() }
+            let target = destination.appendingPathComponent(resourceFilename(resource))
+            try MediaFileProtection.createFile(target)
+            let output = try FileHandle(forWritingTo: target)
+            defer { try? output.close() }
+            var remaining = resource.byteCount
+            for index in 0..<resource.chunkCount {
+                let bytes = min(Self.chunkSize, remaining)
+                let encrypted = try input.read(upToCount: bytes + 28) ?? Data()
+                guard encrypted.count == bytes + 28 else { throw StoreError.invalidRecord }
+                var plain = try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: oldKey,
+                    authenticating: resourceAAD(id, resource, index))
+                defer { plain.resetBytes(in: plain.startIndex..<plain.endIndex) }
+                guard plain.count == bytes else { throw StoreError.invalidRecord }
+                try output.write(contentsOf: AES.GCM.seal(plain, using: newKey,
+                    authenticating: resourceAAD(id, resource, index)).combined!)
+                remaining -= bytes
+            }
+            guard remaining == 0, try input.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
+            try output.synchronize()
         }
-        guard remaining == 0, try input.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
-        try output.synchronize()
     }
 
     func resumeResetIfNeeded() throws {
@@ -352,13 +514,56 @@ actor PrivateMediaStore {
 
     private func aad(_ id: String, _ index: Int, _ total: Int) -> Data { Data("\(id):media:\(index):\(total)".utf8) }
 
+    private func resourceAAD(_ id: String, _ resource: GalleryStoredResource, _ index: Int) -> Data {
+        if resource.id.isEmpty { return aad(id, index, resource.byteCount) }
+        return Data("\(id):resource:\(resource.id):\(resource.role.rawValue):\(resource.typeIdentifier):\(index):\(resource.byteCount)".utf8)
+    }
+
+    private func resourceFilename(_ resource: GalleryStoredResource) -> String {
+        resource.id.isEmpty ? "media.sealed" : resource.id + ".sealed"
+    }
+
+    private func mediaResources(_ record: StoredRecord) -> [GalleryStoredResource] {
+        record.resources ?? [.init(id: "", role: record.asset.kind == .photo ? .photo : .video,
+            fileExtension: record.fileExtension, typeIdentifier: "", byteCount: record.byteCount, chunkCount: record.chunkCount)]
+    }
+
+    private func encryptedInput(id: String, resource: GalleryStoredResource) throws -> FileHandle {
+        let url = try itemDirectory(id).appendingPathComponent(resourceFilename(resource))
+        let attributes = try manager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.size] as? NSNumber)?.intValue == resource.byteCount + resource.chunkCount * 28 else { throw StoreError.invalidRecord }
+        return try FileHandle(forReadingFrom: url)
+    }
+
     private func record(id: String) throws -> StoredRecord {
-        let data = try open(itemDirectory(id).appendingPathComponent("record.sealed"), key: itemKey(id), context: id + ":record", limit: 65_536)
+        var data = try open(itemDirectory(id).appendingPathComponent("record.sealed"), key: itemKey(id), context: id + ":record", limit: 65_536)
+        defer { data.resetBytes(in: data.startIndex..<data.endIndex) }
         let record = try JSONDecoder().decode(StoredRecord.self, from: data)
-        guard record.version == 1, record.asset.id == id, record.asset.source == .privateLibrary,
+        guard [1, 2].contains(record.version), record.asset.id == id, record.asset.source == .privateLibrary,
+              record.asset.pixelWidth > 0, record.asset.pixelHeight > 0, record.asset.duration.isFinite, record.asset.duration >= 0,
               (1...Self.maximumBytes).contains(record.byteCount),
               record.chunkCount == (record.byteCount + Self.chunkSize - 1) / Self.chunkSize,
-              ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(record.fileExtension) else { throw StoreError.invalidRecord }
+              GalleryOriginalFormats.extensions.contains(record.fileExtension) else { throw StoreError.invalidRecord }
+        if record.version == 1 {
+            guard record.resources == nil, record.asset.originalKind == nil,
+                  ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(record.fileExtension) else { throw StoreError.invalidRecord }
+        } else {
+            guard let resources = record.resources, (1...3).contains(resources.count),
+                  Set(resources.map(\.id)).count == resources.count,
+                  resources[0].fileExtension == record.fileExtension, resources[0].byteCount == record.byteCount,
+                  resources[0].chunkCount == record.chunkCount,
+                  (record.asset.kind == .video) == (resources[0].role == .video),
+                  try GalleryOriginalFormats.classify(resources.map { ($0.role, $0.typeIdentifier) }) == record.asset.originalKind else { throw StoreError.invalidRecord }
+            var total = 0
+            for resource in resources {
+                guard UUID(uuidString: resource.id)?.uuidString.lowercased() == resource.id,
+                      GalleryOriginalFormats.suffix(for: resource.typeIdentifier) == resource.fileExtension,
+                      resource.byteCount > 0, resource.byteCount <= Self.maximumBytes - total,
+                      resource.chunkCount == (resource.byteCount + Self.chunkSize - 1) / Self.chunkSize else { throw StoreError.invalidRecord }
+                total += resource.byteCount
+            }
+        }
         return record
     }
 
@@ -409,7 +614,7 @@ actor MediaWorkStore {
     func currentSession() -> UUID { session }
     func allocate(extension suffix: String, session expected: UUID) throws -> URL {
         guard session == expected else { throw CancellationError() }
-        guard ["jpg", "heic", "png", "mov", "mp4", "m4v"].contains(suffix) else { throw PrivateMediaStore.StoreError.invalidRecord }
+        guard GalleryOriginalFormats.extensions.contains(suffix) else { throw PrivateMediaStore.StoreError.invalidRecord }
         try MediaFileProtection.prepareDirectory(root)
         return root.appendingPathComponent(UUID().uuidString.lowercased() + "." + suffix)
     }
