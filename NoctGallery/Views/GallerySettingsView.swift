@@ -52,8 +52,27 @@ struct GallerySettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if !model.sharingPresets.isEmpty {
+                    Section("Sharing presets") {
+                        ForEach(model.sharingPresets) { preset in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(preset.name)
+                                    Text("\(preset.format.title) · \(preset.maximumDimension) px · video \(preset.videoMaximumEdge) px")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Delete Preset", systemImage: "trash", role: .destructive) { model.deleteSharingPreset(preset.id) }.labelStyle(.iconOnly)
+                            }
+                        }
+                    }
+                }
 
                 Section("Privacy & storage") {
+                    NavigationLink("Storage", destination: GalleryStorageView())
+                    NavigationLink("Private Text Search", destination: GalleryTextSearchView())
+                    NavigationLink("Find Duplicates", destination: GalleryDuplicatesView())
+                    NavigationLink("Incoming Shares", destination: GalleryInboxView())
                     DisclosureGroup("How sharing works") {
                         Text("Sharing creates clean copies; originals stay unchanged. Video shares use H.264/AAC, up to 1080p at 30 fps.")
                             .font(.footnote)

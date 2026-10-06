@@ -15,6 +15,53 @@ final class PrivateCameraEngine: NSObject, @unchecked Sendable, AVCapturePhotoCa
     private var recordingCancelled = false
     private var configured = false
 
+    struct Controls: Sendable {
+        var minimumZoom: Double = 1
+        var maximumZoom: Double = 1
+        var minimumExposure: Double = -2
+        var maximumExposure: Double = 2
+        var flashAvailable = false
+    }
+
+    func controls() async throws -> Controls {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                guard let device = self.videoInput?.device else { continuation.resume(throwing: CameraError.unavailable); return }
+                continuation.resume(returning: Controls(minimumZoom: Double(device.minAvailableVideoZoomFactor),
+                    maximumZoom: Double(min(6, device.maxAvailableVideoZoomFactor)), minimumExposure: Double(max(-2, device.minExposureTargetBias)),
+                    maximumExposure: Double(min(2, device.maxExposureTargetBias)), flashAvailable: device.hasFlash))
+            }
+        }
+    }
+
+    func adjust(zoom: Double, exposure: Double) async throws {
+        guard zoom.isFinite, exposure.isFinite else { throw CameraError.unavailable }
+        try await perform {
+            guard let device = self.videoInput?.device else { throw CameraError.unavailable }
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.videoZoomFactor = min(device.maxAvailableVideoZoomFactor, max(device.minAvailableVideoZoomFactor, CGFloat(zoom)))
+            device.setExposureTargetBias(min(device.maxExposureTargetBias, max(device.minExposureTargetBias, Float(exposure))), completionHandler: nil)
+        }
+    }
+
+    func focus(at point: CGPoint) async throws {
+        guard point.x.isFinite, point.y.isFinite, (0...1).contains(point.x), (0...1).contains(point.y) else { throw CameraError.unavailable }
+        try await perform {
+            guard let device = self.videoInput?.device else { throw CameraError.unavailable }
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if device.isFocusPointOfInterestSupported {
+                device.focusPointOfInterest = point
+                if device.isFocusModeSupported(.autoFocus) { device.focusMode = .autoFocus }
+            }
+            if device.isExposurePointOfInterestSupported {
+                device.exposurePointOfInterest = point
+                if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+            }
+        }
+    }
+
     enum CameraError: LocalizedError {
         case unavailable, permission, busy, captureFailed
         var errorDescription: String? {
@@ -80,7 +127,7 @@ final class PrivateCameraEngine: NSObject, @unchecked Sendable, AVCapturePhotoCa
         }
     }
 
-    func photo(rotation: CGFloat) async throws -> Data {
+    func photo(rotation: CGFloat, flash: AVCaptureDevice.FlashMode = .off) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard self.session.isRunning else { continuation.resume(throwing: CameraError.unavailable); return }
@@ -88,6 +135,7 @@ final class PrivateCameraEngine: NSObject, @unchecked Sendable, AVCapturePhotoCa
                 self.photoContinuation = continuation
                 let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
                 settings.photoQualityPrioritization = .quality
+                if self.photoOutput.supportedFlashModes.contains(flash) { settings.flashMode = flash }
                 if let connection = self.photoOutput.connection(with: .video), connection.isVideoRotationAngleSupported(rotation) {
                     connection.videoRotationAngle = rotation
                 }

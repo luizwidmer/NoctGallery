@@ -4,7 +4,7 @@ import SwiftUI
 struct NoctGalleryApp: App {
     @StateObject private var support = AppSupportStore.shared
 
-    @StateObject private var model = GalleryViewModel()
+    @StateObject private var model = GalleryViewModel(inbox: try? GalleryImportInbox.appInbox())
 
     var body: some Scene {
         WindowGroup {

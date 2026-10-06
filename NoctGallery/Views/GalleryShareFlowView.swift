@@ -18,6 +18,17 @@ struct GalleryShareFlowView: View {
     @State private var previewError: String?
     @State private var selectedExport = 0
     @State private var showsActivity = false
+    @State private var selectedCover: UUID?
+    @State private var tracking = false
+    @State private var trackingWork: Task<Void, Never>?
+    @State private var loadedDefaults = false
+    @State private var outputFormat = GalleryOutputFormat.heic.rawValue
+    @State private var maximumDimension = 4_096
+    @State private var quality = 0.9
+    @State private var namesPreset = false
+    @State private var presetName = ""
+    @State private var silenceStart = 0.0
+    @State private var silenceEnd = 1.0
 
     init(request: GalleryShareRequest) {
         self.request = request
@@ -52,14 +63,27 @@ struct GalleryShareFlowView: View {
             }
         }
         .task(id: frameRevision) {
+            if !loadedDefaults {
+                outputFormat = model.shareOutputFormat; maximumDimension = model.shareMaximumDimension; quality = model.shareLossyQuality
+                if isSingle && asset.kind == .photo { edits.photoEdits = model.organization.items[asset.id]?.photoEdits }
+                loadedDefaults = true
+            }
             guard isSingle else { return }
             do {
-                let loaded = try await model.shareEditorImage(for: asset, time: frameTime)
+                let loaded = try await model.shareEditorImage(for: asset, time: frameTime, photoEdits: edits.photoEdits)
                 guard !Task.isCancelled else { return }
                 image = loaded; previewError = nil; suggestions = []
             } catch { if !Task.isCancelled { previewError = error.localizedDescription } }
         }
-        .onDisappear { detectionTask?.cancel(); detectionTask = nil; image = nil; suggestions = [] }
+        .onDisappear { detectionTask?.cancel(); trackingWork?.cancel(); detectionTask = nil; image = nil; suggestions = [] }
+        .alert("Save Sharing Preset", isPresented: $namesPreset) {
+            TextField("Preset name", text: $presetName)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                model.saveSharingPreset(.init(name: presetName.trimmingCharacters(in: .whitespacesAndNewlines), format: GalleryOutputFormat(rawValue: outputFormat) ?? .heic,
+                    maximumDimension: maximumDimension, quality: quality, videoMaximumEdge: edits.videoMaximumEdge, removeAudio: edits.removeAudio, metadata: profile))
+            }.disabled(!GalleryOrganization.validName(presetName.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
     }
 
     private var editor: some View {
@@ -67,9 +91,9 @@ struct GalleryShareFlowView: View {
             if isSingle {
                 Section {
                     if let image {
-                        GalleryRedactionCanvas(image: image, masks: $edits.redactions, suggestions: $suggestions)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                        Text("Drag to cover; tap to remove. Tap dotted suggestions to accept them.")
+                        GalleryRedactionCanvas(image: image, masks: $edits.redactions, suggestions: $suggestions, selectedID: $selectedCover, time: frameTime)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        Text("Tap dotted suggestions to accept them.")
                             .font(.footnote).foregroundStyle(.secondary)
                         HStack {
                             Button("Suggest Faces & Text", systemImage: "viewfinder") { detect() }
@@ -101,8 +125,46 @@ struct GalleryShareFlowView: View {
                                in: min(edits.trimStart + 0.1, asset.duration)...asset.duration)
                             .accessibilityLabel("Trim end")
                         Toggle("Remove Audio", isOn: $edits.removeAudio)
-                        Text("Covers stay in the same position throughout the clip. Review the whole export for moving details.")
+                        if let index = edits.redactions.firstIndex(where: { $0.id == selectedCover }) {
+                            Button("Track Selected Cover Through Clip", systemImage: "viewfinder") { trackSelectedCover() }.disabled(tracking)
+                            Button("Add Manual Keyframe at Preview") {
+                                if edits.redactions[index].keyframes.isEmpty {
+                                    let rect = edits.redactions[index].rect
+                                    edits.redactions[index].keyframes = [.init(time: 0, rect: rect), .init(time: asset.duration, rect: rect)]
+                                }
+                                let rect = edits.redactions[index].rect(at: frameTime)
+                                edits.redactions[index].setRect(rect, at: frameTime)
+                            }
+                            if !edits.redactions[index].keyframes.isEmpty {
+                                LabeledContent("Moving cover", value: "\(edits.redactions[index].keyframes.count) keyframes")
+                                Button("Make Cover Static") {
+                                    let rect = edits.redactions[index].rect(at: frameTime)
+                                    edits.redactions[index].rect = rect; edits.redactions[index].keyframes = []
+                                }
+                            }
+                        }
+                        if tracking { ProgressView("Tracking selected area…"); Button("Cancel Tracking") { trackingWork?.cancel() } }
+                        Text("Tracking and interpolation can miss motion. Scrub to adjust cover keyframes and review the whole export.")
                             .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if !edits.removeAudio {
+                        Section("Silence parts of the audio") {
+                            LabeledContent("From", value: timeLabel(silenceStart))
+                            Slider(value: $silenceStart, in: 0...max(0.001, asset.duration - 0.1)).accessibilityLabel("Silence start")
+                            LabeledContent("Through", value: timeLabel(max(silenceStart + 0.1, min(asset.duration, silenceEnd))))
+                            Slider(value: $silenceEnd, in: min(asset.duration, silenceStart + 0.1)...asset.duration).accessibilityLabel("Silence end")
+                            Button("Add Silent Section", systemImage: "speaker.slash") {
+                                edits.silencedRanges.append(.init(start: silenceStart, end: min(asset.duration, max(silenceStart + 0.1, silenceEnd))))
+                            }.disabled(edits.silencedRanges.count >= 100)
+                            ForEach(edits.silencedRanges) { range in
+                                HStack {
+                                    Text("\(timeLabel(range.start)) – \(timeLabel(range.end))").font(.caption)
+                                    Spacer()
+                                    Button("Remove Silent Section", systemImage: "minus.circle", role: .destructive) { edits.silencedRanges.removeAll { $0.id == range.id } }.labelStyle(.iconOnly)
+                                }
+                            }
+                            Text("Times refer to the original clip. Audio outside these sections is retained.").font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if asset.originalKind != nil {
@@ -130,17 +192,36 @@ struct GalleryShareFlowView: View {
                 }
                 Button("Customize Metadata", systemImage: "slider.horizontal.3") { showsMetadata = true }
             }
+            Section("Output & sharing presets") {
+                Menu("Use Sharing Preset", systemImage: "slider.horizontal.3") {
+                    ForEach(GallerySharingPreset.builtIns + model.sharingPresets) { preset in
+                        Button(preset.name) {
+                            outputFormat = preset.format.rawValue; maximumDimension = preset.maximumDimension; quality = preset.quality
+                            edits.videoMaximumEdge = preset.videoMaximumEdge; edits.removeAudio = preset.removeAudio; profile = preset.metadata
+                        }
+                    }
+                }
+                Picker("Photo format", selection: $outputFormat) { ForEach(GalleryOutputFormat.allCases) { Text($0.title).tag($0.rawValue) } }
+                Picker("Photo maximum edge", selection: $maximumDimension) { Text("2,048 px").tag(2_048); Text("4,096 px").tag(4_096); Text("8,192 px").tag(8_192) }
+                if outputFormat != GalleryOutputFormat.png.rawValue {
+                    LabeledContent("Photo quality", value: quality.formatted(.percent.precision(.fractionLength(0))))
+                    Slider(value: $quality, in: 0.65...1, step: 0.01).accessibilityLabel("Photo export quality")
+                }
+                Picker("Video maximum edge", selection: $edits.videoMaximumEdge) { Text("960 px").tag(960); Text("1,280 px").tag(1_280); Text("1,920 px").tag(1_920) }
+                if !isSingle { Toggle("Remove Video Audio", isOn: $edits.removeAudio) }
+                Button("Save Current Sharing Preset") { presetName = ""; namesPreset = true }.disabled(model.sharingPresets.count >= 30)
+            }
             Section {
                 Button {
                     selectedExport = 0
                     model.errorMessage = nil
-                    let configuration = GalleryPreferences.configuration(format: model.shareOutputFormat,
-                        maximumDimension: model.shareMaximumDimension, quality: model.shareLossyQuality)
+                    let configuration = GalleryPreferences.configuration(format: outputFormat, maximumDimension: maximumDimension, quality: quality)
                     Task { await model.prepareShares(assets: request.assets, configuration: configuration, profile: profile, edits: edits) }
                 } label: {
                     Label("Prepare Preview", systemImage: "eye").frame(maxWidth: .infinity)
                 }
                 .accessibilityIdentifier("share.preparePreview")
+                .disabled(tracking)
                 if model.isProcessing { ProgressView(model.processingMessage ?? "Preparing…") }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             } footer: {
@@ -208,64 +289,26 @@ struct GalleryShareFlowView: View {
             }
         }
     }
-}
 
-private struct GalleryRedactionCanvas: View {
-    let image: UIImage
-    @Binding var masks: [GalleryRedaction]
-    @Binding var suggestions: [GalleryRedaction]
-    @State private var drag: CGRect?
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                Image(uiImage: image).resizable().scaledToFit().accessibilityHidden(true)
-                ForEach(suggestions) { suggestion in
-                    Button {
-                        if masks.count < 100 { masks.append(suggestion); suggestions.removeAll { $0.id == suggestion.id } }
-                    } label: {
-                        Rectangle().strokeBorder(.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .frame(width: suggestion.rect.width * proxy.size.width, height: suggestion.rect.height * proxy.size.height)
-                    .position(x: suggestion.rect.midX * proxy.size.width, y: suggestion.rect.midY * proxy.size.height)
-                    .accessibilityLabel("Suggested sensitive area")
+    private func trackSelectedCover() {
+        guard let index = edits.redactions.firstIndex(where: { $0.id == selectedCover }) else { return }
+        let cover = edits.redactions[index]
+        let start = edits.trimStart, end = edits.trimEnd ?? asset.duration
+        tracking = true; suggestionStatus = nil
+        trackingWork = Task {
+            defer { tracking = false }
+            do {
+                let frames = try await model.trackCover(for: asset, cover: cover, start: start, end: end)
+                try Task.checkCancellation()
+                guard let current = edits.redactions.firstIndex(where: { $0.id == cover.id }), model.shareRequest?.id == request.id else { return }
+                guard edits.redactions[current] == cover, edits.trimStart == start, (edits.trimEnd ?? asset.duration) == end else {
+                    suggestionStatus = "The cover or clip changed. Track again using the current edits."
+                    return
                 }
-                ForEach(masks) { mask in
-                    Button { masks.removeAll { $0.id == mask.id } } label: { Rectangle().fill(.black) }
-                    .buttonStyle(.plain)
-                    .frame(width: mask.rect.width * proxy.size.width, height: mask.rect.height * proxy.size.height)
-                    .position(x: mask.rect.midX * proxy.size.width, y: mask.rect.midY * proxy.size.height)
-                    .accessibilityLabel("Remove cover")
-                }
-                if let drag { box(drag, size: proxy.size, suggested: false).allowsHitTesting(false) }
-            }
-            .contentShape(Rectangle())
-            .highPriorityGesture(DragGesture(minimumDistance: 8)
-                .onChanged { drag = normalized($0, in: proxy.size) }
-                .onEnded { value in
-                    if let rect = normalized(value, in: proxy.size), masks.count < 100 { masks.append(.init(rect: rect)) }
-                    drag = nil
-                })
+                edits.redactions[current].keyframes = frames
+                suggestionStatus = "Tracking ready. Review and adjust across the clip."
+            } catch { if !(error is CancellationError) { suggestionStatus = error.localizedDescription } }
         }
-        .aspectRatio(image.size.width / max(1, image.size.height), contentMode: .fit)
-    }
-
-    private func box(_ rect: CGRect, size: CGSize, suggested: Bool) -> some View {
-        Rectangle().strokeBorder(suggested ? .yellow : .white, style: StrokeStyle(lineWidth: 2, dash: suggested ? [5, 4] : []))
-            .frame(width: rect.width * size.width, height: rect.height * size.height)
-            .position(x: rect.midX * size.width, y: rect.midY * size.height)
-    }
-
-    private func normalized(_ value: DragGesture.Value, in size: CGSize) -> CGRect? {
-        guard size.width > 0, size.height > 0 else { return nil }
-        let x = min(max(0, value.startLocation.x / size.width), 1)
-        let y = min(max(0, value.startLocation.y / size.height), 1)
-        let endX = min(max(0, value.location.x / size.width), 1)
-        let endY = min(max(0, value.location.y / size.height), 1)
-        let rect = CGRect(x: min(x, endX), y: min(y, endY), width: abs(endX - x), height: abs(endY - y))
-        return rect.width > 0.005 && rect.height > 0.005 ? rect : nil
     }
 }
 

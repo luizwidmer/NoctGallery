@@ -52,7 +52,8 @@ enum VideoSanitizer {
         let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
         guard rect.width.isFinite, rect.height.isFinite, rect.minX.isFinite, rect.minY.isFinite,
               rect.width >= 1, rect.height >= 1, max(rect.width, rect.height) <= 16_384 else { throw VideoError.unsupported }
-        let scale = min(1, 1920 / max(rect.width, rect.height), 1080 / min(rect.width, rect.height))
+        let maximumEdge = Double(edits.videoMaximumEdge)
+        let scale = min(1, maximumEdge / max(rect.width, rect.height), maximumEdge * 9 / 16 / min(rect.width, rect.height))
         let width = max(2, Int(rect.width * scale) / 2 * 2)
         let height = max(2, Int(rect.height * scale) / 2 * 2)
         let composition = AVMutableVideoComposition()
@@ -79,7 +80,7 @@ enum VideoSanitizer {
         writer.metadata = metadata(profile)
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 8_000_000,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: edits.videoMaximumEdge == 960 ? 2_000_000 : edits.videoMaximumEdge == 1_280 ? 4_000_000 : 8_000_000,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]
         ])
         videoInput.expectsMediaDataInRealTime = false
@@ -120,7 +121,7 @@ enum VideoSanitizer {
                 if !videoFinished, videoInput.isReadyForMoreMediaData {
                     if let sample = videoOutput.copyNextSampleBuffer() {
                         guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw VideoError.conversionFailed }
-                        try edits.redact(buffer)
+                        try edits.redact(buffer, at: CMSampleBufferGetPresentationTimeStamp(sample).seconds)
                         CVBufferRemoveAllAttachments(buffer)
                         guard adaptor.append(buffer, withPresentationTime: CMSampleBufferGetPresentationTimeStamp(sample)) else { throw VideoError.conversionFailed }
                         frameCount += 1
@@ -129,8 +130,9 @@ enum VideoSanitizer {
                 }
                 if !audioFinished, let audioInput, let audioOutput, audioInput.isReadyForMoreMediaData {
                     if let sample = audioOutput.copyNextSampleBuffer() {
-                        CMRemoveAllAttachments(sample)
-                        guard audioInput.append(sample) else { throw VideoError.conversionFailed }
+                        let muted = try GalleryAudioRedaction.mute(sample, ranges: edits.silencedRanges)
+                        CMRemoveAllAttachments(muted)
+                        guard audioInput.append(muted) else { throw VideoError.conversionFailed }
                     } else { audioFinished = true; audioInput.markAsFinished() }
                     advanced = true
                 }

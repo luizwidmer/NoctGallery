@@ -94,7 +94,9 @@ struct ImageSanitizer: Sendable {
         guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
             throw SanitizationError.decodeFailed
         }
-        let normalized = try edits.redact(normalize(decoded))
+        let upright = try normalize(decoded)
+        let transformed = try edits.photoEdits?.apply(to: upright) ?? upright
+        let normalized = try edits.redact(transformed)
         let encoded = try encode(
             normalized,
             format: configuration.outputFormat,

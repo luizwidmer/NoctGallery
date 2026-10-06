@@ -21,6 +21,13 @@ actor TemporaryExportStore {
 
     func currentSession() -> UUID { sessionID }
 
+    func byteCount() throws -> Int64 {
+        guard fileManager.fileExists(atPath: rootURL.path) else { return 0 }
+        return try fileManager.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: [.fileSizeKey]).reduce(0) {
+            $0 + Int64(try $1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+    }
+
     func write(_ image: SanitizedImage, session: UUID? = nil) throws -> URL {
         if let session, session != sessionID { throw CancellationError() }
         guard ["heic", "jpg", "png"].contains(image.fileExtension) else {

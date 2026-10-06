@@ -20,6 +20,7 @@ struct PhotoAssetRecord: Identifiable, Hashable, Codable, Sendable {
     var originalKind: GalleryOriginalKind? = nil
 
     var id: String { localIdentifier }
+    var importedAt: Date? = nil
     var mediaTitle: String { originalKind?.title ?? kind.title }
 
     var dimensionsLabel: String {

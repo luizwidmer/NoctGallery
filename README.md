@@ -47,17 +47,24 @@ xcodebuild -project NoctGallery.xcodeproj -scheme NoctGallery \
   ARCHS=arm64 ONLY_ACTIVE_ARCH=YES EXCLUDED_ARCHS=x86_64 test
 ```
 
-Tests use isolated temporary storage and in-memory credential stores. A Simulator build does not validate a physical camera, Face ID hardware or a connected USB key. The local FIDO2 flow needs no associated-domain or NFC entitlement. A separate review installation can be built by overriding `PRODUCT_BUNDLE_IDENTIFIER` and `GALLERY_DISPLAY_NAME`.
+Tests use isolated temporary storage and in-memory credential stores. A Simulator build does not validate a physical camera, Face ID hardware or a connected USB key. The local FIDO2 flow needs no associated-domain or NFC entitlement. A separate review installation can be built by overriding `GALLERY_APP_BUNDLE_IDENTIFIER` and `GALLERY_DISPLAY_NAME`; the import extension and App Group identifiers follow that bundle identifier. Disposable screen-rendering tests require an identifier ending in `.gallery-features.visual-review` and otherwise skip.
+
+Physical builds must provision the main app and `NoctGalleryImport` extension with their shared App Group, `group.<GALLERY_APP_BUNDLE_IDENTIFIER>`. Open and unlock Gallery once before using its share-sheet import destination. Signing and App Group registration in the Apple developer account are separate from a Simulator or unsigned build.
 
 ## Features
 
 | Workflow | What you can do |
 | --- | --- |
 | Private library | Browse Photos, copy cleaned media, or move supported originals into encrypted storage. |
-| Private camera | Capture directly into Gallery, without saving to Apple Photos. |
-| Deliberate sharing | Cover sensitive details, trim or mute videos, then inspect the actual export and its metadata before sharing. |
-| Organization | Encrypted albums, favorites and tags, with batch sharing, organization, copy and deletion. |
-| Metadata editing | Save presets and choose optional coordinates by map, search, or numeric input. |
+| Viewing | Open a fullscreen viewer with pinch/double-tap zoom, swipe navigation and video playback. |
+| Private camera | Capture directly into Gallery, with tap focus, exposure, zoom, grid, flash and photo timer controls. |
+| Deliberate sharing | Move/resize covers, undo/redo, zoom, track video covers or add keyframes, trim clips and silence selected audio intervals. Review the encoded copy before sharing. |
+| Organization | Encrypted albums, favorites, tags, captions and notes; date/media/format/tag/duration filters and multiple sort orders; batch actions. |
+| Photo editing | Save reversible crop, quarter-turn rotation and straightening recipes; keep original bytes intact. |
+| Import | Preserve supported original files from Files or the encrypted share-sheet inbox. Source files remain in their original apps. |
+| Library tools | Inspect storage by album/item, review exact and visually similar duplicates, and optionally enable encrypted on-device text search. |
+| Sharing presets | Save photo format/size/quality, video size, audio removal and optional metadata together. |
+| Metadata editing | Save metadata presets and choose optional coordinates by map, search, or numeric input. |
 | App protection | Require a PIN, biometrics, a compatible physically connected USB FIDO2 key, or every selected factor. |
 | Duress actions | Reset local storage or retain selected items under a newly rotated key; rehearse with isolated sample media. |
 
@@ -81,9 +88,17 @@ vary dates and time zones, add an optional GPS area, omit camera identity, or
 strip optional metadata entirely. Maps uses an explicit place search; Gallery
 does not request your current location.
 
-**Prepare to Share** lets you draw opaque covers, optionally use on-device face/text suggestions, and choose saved metadata presets. Video covers stay at fixed positions throughout the selected clip; trim and audio removal are optional. Suggestions can miss faces, text or plates and must be reviewed. The next screen plays or displays the encoded output, shows its size and metadata, and compares removed/changed fields. Batch sharing handles up to 20 copies, with a 512 MB combined export limit. Each item needs its own review for sensitive visible content.
+**Prepare to Share** lets you draw, move and resize opaque covers, zoom the canvas, undo/redo edits, optionally use on-device face/text suggestions, and choose metadata or complete sharing presets. Video covers can stay fixed, follow automatic on-device tracking, or interpolate between manually edited keyframes. Trim, full audio removal and selected silent intervals are optional. Tracking and suggestions can miss sensitive content; inspect the whole exported clip. The next screen displays the encoded output, its size and metadata, and compares removed/changed fields. Batch sharing handles up to 20 copies, with a 512 MB combined export limit. Each item needs its own review for sensitive visible content.
 
-Albums, tags and favorites are encrypted in the vault and available only while unlocked. Search includes album names and tags, without a system search index or stored OCR transcripts. Batch organization and deletion accept up to 500 selected items. Deleting an album keeps its media.
+Albums, tags, favorites, captions, notes and photo recipes are encrypted in the vault and available only while unlocked. Search includes album names, tags, captions and notes. Optional **Private Text Search** reads text on-device and saves an encrypted transcript in the vault; disabling it deletes those transcripts. No system search index is created. Text indexing checks up to 500 photos per run. Duplicate review compares authenticated original bytes for up to 500 items and visual similarity for up to 300 photo thumbnails; select a batch to choose which items are scanned. Similarity is a suggestion, and deletion is always manual. Batch organization and deletion accept up to 500 selected items. Deleting an album keeps its media.
+
+Saved crop/rotation/straightening recipes apply to private previews and newly shared copies. Resetting a recipe restores the original view. The storage dashboard reports encrypted item bytes, original media bytes, album totals, largest items and temporary work/export files. Items in multiple albums contribute to each album total.
+
+### Files and incoming shares
+
+The Files importer accepts up to 20 supported images or videos at a time, bounded to 1 GB per file and the image/video decode limits. It detects the actual media format, encrypts preserved originals and verifies them before completing an import. It never deletes the source in Files.
+
+Gallery's share extension encrypts incoming files directly into a protected, backup-excluded App Group inbox using a public recipient key. The vault key and recipient private key remain available only to the main app. The inbox holds at most 20 files and 1 GB total; open Gallery and unlock to import or discard them. Queued files are removed only after the vault copy verifies. The extension does not unlock or expose the private library. This is a local iOS import destination; no account, relay or transfer service participates.
 
 ### App protection
 
@@ -123,9 +138,10 @@ Decoy metadata is optional synthetic data based on documented equipment. It is n
 | --- | --- |
 | [Metadata and format guide](Docs/MediaMetadata.md) | Formats, presets, and conversion tradeoffs |
 | [Security model](SECURITY.md) | Storage, authentication, and reporting |
-| [Verification record](Docs/Validation-2026-09-17.md) | Recorded tests and physical-device limits |
+| [Library tools verification](Docs/Validation-2026-10-06-LibraryTools.md) | Current feature tests, rendered screens and physical-device limits |
+| [Earlier verification record](Docs/Validation-2026-09-17.md) | Earlier tests and physical-device limits |
 | [0.2.0 release notes](Docs/Release-0.2.0.md) | Build evidence and release preparation |
-| [Privacy policy draft](Docs/PrivacyPolicy-2026-09-19.md) | Prepared text and publication status |
+| [Privacy policy](Docs/PrivacyPolicy-2026-10-06.md) | Published policy for local storage, analysis and sharing |
 
 <a id="contributing-and-security"></a>
 

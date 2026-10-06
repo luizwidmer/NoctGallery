@@ -15,6 +15,17 @@ struct GalleryView: View {
     @State private var showsOrganize = false
     @State private var confirmsDelete = false
     @State private var batchBusy = false
+    @State private var sort = GallerySort.newest
+    @State private var formatFilter = GalleryFormatFilter.all
+    @State private var tagFilter = ""
+    @State private var dateFilter = false
+    @State private var earliestDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var latestDate = Date()
+    @State private var minimumDuration = 0.0
+    @State private var showsFilters = false
+    @State private var showsImport = false
+    @State private var showsInbox = false
+    @State private var showsDuplicates = false
 
     private var selectedAssets: [PhotoAssetRecord] {
         (source == .photos ? model.assets : model.privateAssets).filter { selection.contains($0.id) }
@@ -22,7 +33,11 @@ struct GalleryView: View {
 
     private var filteredAssets: [PhotoAssetRecord] {
         let assets = source == .photos ? model.assets : model.privateAssets
-        return assets.filter { asset in
+        let result = assets.filter { asset in
+            formatFilter.matches(asset) &&
+            (tagFilter.isEmpty || model.organization.items[asset.id]?.tags.contains(tagFilter) == true) &&
+            (!dateFilter || (asset.creationDate.map { $0 >= Calendar.current.startOfDay(for: earliestDate) && $0 < (Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: latestDate)) ?? latestDate) } ?? false)) &&
+            (minimumDuration == 0 || (asset.kind == .video && asset.duration >= minimumDuration)) &&
             (filter == "all" || asset.kind.rawValue == filter) &&
             (collection == "all" || (collection == "favorites" && model.organization.items[asset.id]?.favorite == true)
                 || (UUID(uuidString: collection).map { id in model.organization.items[asset.id]?.albumIDs.contains(id) == true } ?? false)) &&
@@ -32,6 +47,7 @@ struct GalleryView: View {
              || asset.mediaTitle.localizedCaseInsensitiveContains(searchText)
              || (source == .privateLibrary && model.organization.searchText(for: asset.id).localizedCaseInsensitiveContains(searchText)))
         }
+        return GalleryLibraryQuery.sorted(result, by: sort, sizes: model.storageItems)
     }
 
     var body: some View {
@@ -93,17 +109,25 @@ struct GalleryView: View {
                 }
             }
             .navigationTitle(source == .photos ? "Photos" : "Private")
-            .searchable(text: $searchText, prompt: source == .privateLibrary ? "Dates, albums or tags" : "Dates, dimensions or type")
+            .searchable(text: $searchText, prompt: source == .privateLibrary ? "Dates, tags, notes or text" : "Dates, dimensions or type")
             .autocorrectionDisabled().textInputAutocapitalization(.never)
-            .navigationDestination(for: PhotoAssetRecord.self) { AssetDetailView(asset: $0) }
+            .navigationDestination(for: PhotoAssetRecord.self) { AssetDetailView(asset: $0, sequence: filteredAssets) }
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Sort & Filter", systemImage: "line.3.horizontal.decrease") { showsFilters = true }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(selecting ? "Done" : "Select") { selecting.toggle(); selection = [] }
                         .disabled(batchBusy)
                 }
                 if source == .privateLibrary {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Albums", systemImage: "folder") { showsAlbums = true }
+                        Menu {
+                            Button("Albums", systemImage: "folder") { showsAlbums = true }
+                            Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }
+                            Button("Incoming Shares", systemImage: "tray.and.arrow.down") { showsInbox = true }
+                            Button("Find Duplicates", systemImage: "square.on.square") { showsDuplicates = true }
+                        } label: { Label("Library Tools", systemImage: "ellipsis.circle") }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Camera", systemImage: "camera") { showCamera = true }.accessibilityIdentifier("private.camera")
@@ -118,6 +142,16 @@ struct GalleryView: View {
             .safeAreaInset(edge: .bottom) { if selecting { selectionBar } }
             .sheet(isPresented: $showsAlbums) { GalleryAlbumsView() }
             .sheet(isPresented: $showsOrganize) { GalleryOrganizeView(ids: selection) }
+            .sheet(isPresented: $showsFilters) { filterSheet }
+            .sheet(isPresented: $showsInbox) { NavigationStack { GalleryInboxView() } }
+            .sheet(isPresented: $showsDuplicates) { NavigationStack { GalleryDuplicatesView(ids: selection.isEmpty ? nil : selection) } }
+            .fileImporter(isPresented: $showsImport, allowedContentTypes: [.image, .movie], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): Task { await model.importFiles(urls) }
+                case .failure(let error): model.errorMessage = error.localizedDescription
+                }
+            }
+            .task(id: model.privateAssets.count) { if source == .privateLibrary { await model.refreshStorage() } }
             .confirmationDialog("Delete \(selection.count) private items?", isPresented: $confirmsDelete) {
                 Button("Delete Permanently", role: .destructive) {
                     batchBusy = true
@@ -137,6 +171,42 @@ struct GalleryView: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(collection == id ? NoctGalleryTheme.accent.opacity(0.18) : Color.secondary.opacity(0.09), in: Capsule())
         }.buttonStyle(.plain).accessibilityAddTraits(collection == id ? .isSelected : [])
+    }
+
+    private var filterSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Sort") {
+                    Picker("Order", selection: $sort) {
+                        ForEach(GallerySort.allCases.filter { source == .privateLibrary || ($0 != .largest && $0 != .recentlyImported) }) { Text($0.title).tag($0) }
+                    }
+                }
+                if source == .privateLibrary {
+                    Section("Format & tags") {
+                        Picker("Format", selection: $formatFilter) { ForEach(GalleryFormatFilter.allCases) { Text($0.title).tag($0) } }
+                        Picker("Tag", selection: $tagFilter) {
+                            Text("Any tag").tag("")
+                            ForEach(Array(Set(model.organization.items.values.flatMap(\.tags))).sorted(), id: \.self) { Text($0).tag($0) }
+                        }
+                    }
+                }
+                Section("Capture date") {
+                    Toggle("Limit date range", isOn: $dateFilter)
+                    if dateFilter {
+                        DatePicker("From", selection: $earliestDate, in: ...latestDate, displayedComponents: .date)
+                        DatePicker("Through", selection: $latestDate, in: earliestDate..., displayedComponents: .date)
+                    }
+                }
+                Section("Video duration") {
+                    Picker("Minimum length", selection: $minimumDuration) {
+                        Text("Any length").tag(0.0); Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0)
+                    }
+                }
+                Section { Button("Reset Filters") { sort = .newest; formatFilter = .all; tagFilter = ""; dateFilter = false; minimumDuration = 0 } }
+            }
+            .navigationTitle("Sort & Filter").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsFilters = false } } }
+        }
     }
 
     private func tile(_ asset: PhotoAssetRecord) -> some View {
@@ -185,6 +255,9 @@ struct GalleryView: View {
                     Button("Albums & Tags", systemImage: "folder") { showsOrganize = true }
                     Button("Favorite", systemImage: "heart") { Task { await model.organize(selection, edit: .favorite(true)) } }
                     Button("Remove Favorite", systemImage: "heart.slash") { Task { await model.organize(selection, edit: .favorite(false)) } }
+                    if model.organization.textSearchEnabled == true {
+                        Button("Read Text in Selection", systemImage: "text.viewfinder") { model.indexText(ids: selection) }
+                    }
                 } label: { Label("Organize", systemImage: "folder").labelStyle(.iconOnly) }
                 Button("Delete", systemImage: "trash", role: .destructive) { confirmsDelete = true }.labelStyle(.iconOnly)
             } else {
@@ -245,6 +318,9 @@ struct PhotoThumbnailView: View {
             }.frame(width: proxy.size.width, height: proxy.size.height)
         }
         .clipped()
-        .task(id: asset.id) { image = await model.thumbnail(for: asset, targetSize: targetSize); finished = true }
+        .task(id: asset.id + String(describing: model.organization.items[asset.id]?.photoEdits)) {
+            image = await model.thumbnail(for: asset, targetSize: targetSize); finished = true
+        }
+        .onDisappear { image = nil; finished = false }
     }
 }

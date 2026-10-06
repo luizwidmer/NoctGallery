@@ -9,6 +9,10 @@ struct GalleryItemOrganization: Codable, Equatable, Sendable {
     var favorite = false
     var albumIDs: Set<UUID> = []
     var tags: [String] = []
+    var caption: String?
+    var notes: String?
+    var recognizedText: String?
+    var photoEdits: GalleryPhotoEdits?
 }
 
 /// Kept inside the encrypted vault, never in preferences or a system search index.
@@ -16,6 +20,7 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
     var version = 1
     var albums: [GalleryAlbum] = []
     var items: [String: GalleryItemOrganization] = [:]
+    var textSearchEnabled: Bool?
 
     func validated() throws -> Self {
         guard version == 1, albums.count <= 200, items.count <= 50_000,
@@ -26,7 +31,11 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
             guard UUID(uuidString: id)?.uuidString.lowercased() == id,
                   item.albumIDs.isSubset(of: albumIDs), item.tags.count <= 32,
                   Set(item.tags).count == item.tags.count,
-                  item.tags.allSatisfy({ Self.validName($0, maximum: 40) }) else { throw PrivateMediaStore.StoreError.invalidRecord }
+                  item.tags.allSatisfy({ Self.validName($0, maximum: 40) }),
+                  item.caption.map({ $0.count <= 512 && $0.utf8.count <= 2_048 }) != false,
+                  item.notes.map({ $0.count <= 8_000 && $0.utf8.count <= 32_000 }) != false,
+                  item.recognizedText.map({ $0.count <= 16_000 && $0.utf8.count <= 64_000 }) != false,
+                  item.photoEdits.map({ (try? $0.validated()) != nil }) != false else { throw PrivateMediaStore.StoreError.invalidRecord }
         }
         return self
     }
@@ -47,7 +56,10 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
 
     func searchText(for id: String) -> String {
         guard let item = items[id] else { return "" }
-        return (item.tags + albums.filter { item.albumIDs.contains($0.id) }.map(\.name)).joined(separator: " ")
+        var parts = item.tags + albums.filter { item.albumIDs.contains($0.id) }.map(\.name)
+        parts += [item.caption, item.notes].compactMap { $0 }
+        if textSearchEnabled == true, let text = item.recognizedText { parts.append(text) }
+        return parts.joined(separator: " ")
     }
 }
 
@@ -56,4 +68,6 @@ enum GalleryOrganizationEdit: Sendable {
     case addToAlbum(UUID)
     case removeFromAlbum(UUID)
     case tags([String])
+    case description(caption: String, notes: String)
+    case photoEdits(GalleryPhotoEdits?)
 }

@@ -104,6 +104,62 @@ final class VideoSanitizerTests: XCTestCase {
         let audible = try await GalleryExportInspection.inspect(url: trimmedAudio, kind: .video)
         XCTAssertEqual(audible.duration, 0.5, accuracy: 0.06)
         XCTAssertTrue(audible.hasAudio)
+
+        let selective = directory.appendingPathComponent("selective-audio.mov")
+        _ = try await VideoSanitizer.sanitize(asset: composition, to: selective, profile: nil,
+            edits: .init(silencedRanges: [.init(start: 0.25, end: 0.65)]))
+        let middle = try await audioLevel(selective, from: 0.35, to: 0.55)
+        let before = try await audioLevel(selective, from: 0.05, to: 0.15)
+        let after = try await audioLevel(selective, from: 0.8, to: 0.9)
+        XCTAssertLessThan(middle, 0.001, "The encoded AAC track must silence the selected interval")
+        XCTAssertGreaterThan(before, 0.04, "Audio before the interval must remain audible")
+        XCTAssertGreaterThan(after, 0.04, "Audio after the interval must remain audible")
+    }
+
+    func testMovingCoverFollowsSourceTimeAfterTrimming() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try MediaFileProtection.prepareDirectory(directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mov")
+        try await videoFixture(source)
+        let left = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)
+        let right = CGRect(x: 0.65, y: 0.1, width: 0.2, height: 0.2)
+        let cover = GalleryRedaction(rect: left, keyframes: [.init(time: 0, rect: left), .init(time: 1, rect: right)])
+        let output = directory.appendingPathComponent("moving-cover.mov")
+        _ = try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: output, profile: nil,
+            edits: .init(redactions: [cover], trimStart: 0.2, trimEnd: 0.9))
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: output))
+        generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+        for outputTime in [0.1, 0.5] {
+            let frame = try await generator.image(at: CMTime(seconds: outputTime, preferredTimescale: 600)).image
+            let context = try XCTUnwrap(CGContext(data: nil, width: frame.width, height: frame.height, bitsPerComponent: 8,
+                bytesPerRow: frame.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+            context.draw(frame, in: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))
+            let samples = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+            let expected = cover.rect(at: outputTime + 0.2)
+            let center = (Int(expected.midY * Double(frame.height)) * frame.width + Int(expected.midX * Double(frame.width))) * 4
+            let uncovered = ((frame.height - 4) * frame.width + 4) * 4
+            XCTAssertLessThan(samples[center], 8, "Covers must move at original timestamps even when the clip is trimmed")
+            XCTAssertGreaterThan(samples[uncovered], 30, "Content outside the cover must survive")
+        }
+    }
+
+    func testAutomaticTrackingFollowsMovingTexturedArea() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try MediaFileProtection.prepareDirectory(directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("tracking.mov")
+        try await trackingFixture(source)
+        let seed = CGRect(x: 0.15, y: 0.3, width: 0.25, height: 1.0 / 3.0)
+        let frames = try await GalleryVideoTracking.track(asset: AVURLAsset(url: source),
+            cover: .init(rect: seed, referenceTime: 0.6), start: 0, end: 1.2)
+        let first = try XCTUnwrap(frames.first), last = try XCTUnwrap(frames.last)
+        XCTAssertEqual(first.time, 0, accuracy: 0.001)
+        XCTAssertEqual(last.time, 1.2, accuracy: 0.001)
+        XCTAssertLessThan(first.rect.minX, seed.minX - 0.025)
+        XCTAssertGreaterThan(last.rect.minX, seed.minX + 0.025)
+        XCTAssertEqual(last.rect.minY, seed.minY, accuracy: 0.06)
     }
 
     func testRotationBecomesPixelsAndCancellationLeavesNoCopy() async throws {
@@ -141,6 +197,72 @@ final class VideoSanitizerTests: XCTestCase {
         task.cancel()
         do { _ = try await task.value; XCTFail("Cancelled conversion succeeded") } catch is CancellationError {}
         XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path))
+    }
+
+    private func audioLevel(_ url: URL, from start: Double, to end: Double) async throws -> Double {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 48_000),
+            duration: CMTime(seconds: end - start, preferredTimescale: 48_000))
+        let output = AVAssetReaderTrackOutput(track: try XCTUnwrap(tracks.first), outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 2
+        ])
+        reader.add(output)
+        XCTAssertTrue(reader.startReading())
+        var squareSum = 0.0, count = 0
+        while let sample = output.copyNextSampleBuffer() {
+            let block = try XCTUnwrap(CMSampleBufferGetDataBuffer(sample))
+            let length = CMBlockBufferGetDataLength(block)
+            var bytes = [Float](repeating: 0, count: length / MemoryLayout<Float>.size)
+            let result = bytes.withUnsafeMutableBytes {
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: $0.baseAddress!)
+            }
+            XCTAssertEqual(result, kCMBlockBufferNoErr)
+            for value in bytes { squareSum += Double(value) * Double(value); count += 1 }
+        }
+        XCTAssertEqual(reader.status, .completed)
+        XCTAssertGreaterThan(count, 0)
+        return sqrt(squareSum / Double(max(1, count)))
+    }
+
+    private func trackingFixture(_ url: URL) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 200, AVVideoHeightKey: 150
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+            sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 200, kCVPixelBufferHeightKey as String: 150,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+        for index in 0..<14 {
+            while !input.isReadyForMoreMediaData {
+                guard writer.status == .writing else { throw VideoSanitizer.VideoError.conversionFailed }
+                try await Task.sleep(for: .milliseconds(2))
+            }
+            var pixel: CVPixelBuffer?
+            XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &pixel), kCVReturnSuccess)
+            let buffer = try XCTUnwrap(pixel)
+            CVPixelBufferLockBaseAddress(buffer, [])
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer)).assumingMemoryBound(to: UInt8.self)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            memset(base, 230, stride * 150)
+            let originX = 18 + index * 2
+            for y in 45..<95 {
+                for x in originX..<(originX + 50) {
+                    let offset = y * stride + x * 4
+                    let value: UInt8 = ((x - originX) / 5 + (y - 45) / 5).isMultiple(of: 2) ? 20 : 100
+                    base[offset] = value; base[offset + 1] = value; base[offset + 2] = value; base[offset + 3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10)))
+        }
+        input.markAsFinished(); await writer.finishWriting()
+        XCTAssertEqual(writer.status, .completed)
     }
 
     private func videoFixture(_ url: URL, rotated: Bool = false) async throws {

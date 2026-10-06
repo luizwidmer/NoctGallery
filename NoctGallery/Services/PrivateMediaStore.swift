@@ -135,8 +135,9 @@ actor PrivateMediaStore {
         guard attributes[.type] as? FileAttributeType == .typeRegular,
               let size = (attributes[.size] as? NSNumber)?.intValue, size > 0, size <= Self.maximumBytes else { throw StoreError.mediaTooLarge }
         let id = UUID().uuidString.lowercased()
-        let asset = PhotoAssetRecord(localIdentifier: id, creationDate: profile?.capturedAt ?? Date(), modificationDate: nil,
+        var asset = PhotoAssetRecord(localIdentifier: id, creationDate: profile?.capturedAt ?? Date(), modificationDate: nil,
             pixelWidth: width, pixelHeight: height, kind: kind, duration: duration, source: .privateLibrary, decoyProfile: profile)
+        asset.importedAt = Date()
         let count = (size + Self.chunkSize - 1) / Self.chunkSize
         let record = StoredRecord(version: 1, asset: asset, fileExtension: fileExtension, byteCount: size, chunkCount: count)
         let staging = root.appendingPathComponent("staging-" + id, isDirectory: true)
@@ -194,8 +195,9 @@ actor PrivateMediaStore {
                 byteCount: size, chunkCount: (size + Self.chunkSize - 1) / Self.chunkSize)
         }
         let id = UUID().uuidString.lowercased()
-        let asset = PhotoAssetRecord(localIdentifier: id, creationDate: creationDate ?? Date(), modificationDate: nil,
+        var asset = PhotoAssetRecord(localIdentifier: id, creationDate: creationDate ?? Date(), modificationDate: nil,
             pixelWidth: width, pixelHeight: height, kind: kind, duration: duration, source: .privateLibrary, originalKind: originalKind)
+        asset.importedAt = Date()
         let first = manifest[0]
         let record = StoredRecord(version: 2, asset: asset, fileExtension: first.fileExtension,
             byteCount: first.byteCount, chunkCount: first.chunkCount, resources: manifest)
@@ -262,6 +264,70 @@ actor PrivateMediaStore {
     func fileExtension(id: String) throws -> String { try record(id: id).fileExtension }
 
     func resources(id: String) throws -> [GalleryStoredResource] { mediaResources(try record(id: id)) }
+
+    func storageItems() throws -> [String: GalleryStorageItem] {
+        var result: [String: GalleryStorageItem] = [:]
+        for asset in try list() {
+            try Task.checkCancellation()
+            let resources = mediaResources(try record(id: asset.id))
+            var bytes: Int64 = 0
+            for file in try manager.contentsOfDirectory(at: itemDirectory(asset.id), includingPropertiesForKeys: nil) {
+                let attributes = try manager.attributesOfItem(atPath: file.path)
+                guard attributes[.type] as? FileAttributeType == .typeRegular else { throw StoreError.invalidRecord }
+                bytes += (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            }
+            result[asset.id] = .init(id: asset.id, mediaBytes: resources.reduce(0) { $0 + Int64($1.byteCount) }, storedBytes: bytes)
+        }
+        return result
+    }
+
+    /// Fingerprints all original components, without materializing plaintext files.
+    func contentDigest(id: String, session expected: UUID) throws -> Data {
+        try requireSession(expected)
+        let resources = mediaResources(try record(id: id))
+        let key = try itemKey(id)
+        var digest = SHA256()
+        digest.update(data: Data("NoctGallery.duplicate.v1".utf8))
+        for resource in resources.sorted(by: { $0.role.rawValue < $1.role.rawValue }) {
+            digest.update(data: Data("\(resource.role.rawValue):\(resource.fileExtension):\(resource.byteCount):".utf8))
+            let input = try encryptedInput(id: id, resource: resource)
+            defer { try? input.close() }
+            var remaining = resource.byteCount
+            for index in 0..<resource.chunkCount {
+                try Task.checkCancellation()
+                let bytes = min(Self.chunkSize, remaining)
+                let sealed = try input.read(upToCount: bytes + 28) ?? Data()
+                guard sealed.count == bytes + 28 else { throw StoreError.invalidRecord }
+                var plain = try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key, authenticating: resourceAAD(id, resource, index))
+                defer { plain.resetBytes(in: plain.startIndex..<plain.endIndex) }
+                digest.update(data: plain)
+                remaining -= plain.count
+            }
+            guard remaining == 0, try input.read(upToCount: 1)?.isEmpty != false else { throw StoreError.invalidRecord }
+        }
+        return Data(digest.finalize())
+    }
+
+    func setTextSearch(enabled: Bool, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        value.textSearchEnabled = enabled
+        if !enabled { for id in Array(value.items.keys) { value.items[id]?.recognizedText = nil } }
+        try saveOrganization(value)
+        return value
+    }
+
+    func setRecognizedText(id: String, text: String, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        _ = try record(id: id)
+        var value = try organization()
+        guard value.textSearchEnabled == true else { throw StoreError.invalidRecord }
+        var item = value.items[id] ?? .init()
+        item.recognizedText = String(text.prefix(16_000))
+        value.items[id] = item
+        try saveOrganization(value)
+        return value
+    }
 
     /// Authenticate every saved byte and compare it with the imported original
     /// before Photos deletion. This check creates no plaintext output file.
@@ -355,6 +421,8 @@ actor PrivateMediaStore {
             switch edit {
             case .favorite(let flag): item.favorite = flag
             case .tags(let tags): item.tags = tags
+            case .description(let caption, let notes): item.caption = caption; item.notes = notes
+            case .photoEdits(let edits): item.photoEdits = try edits?.validated()
             case .addToAlbum(let album):
                 guard value.albums.contains(where: { $0.id == album }) else { throw StoreError.invalidRecord }
                 item.albumIDs.insert(album)
@@ -612,6 +680,12 @@ actor MediaWorkStore {
         self.root = root ?? FileManager.default.temporaryDirectory.appendingPathComponent("NoctGalleryMediaWork", isDirectory: true)
     }
     func currentSession() -> UUID { session }
+    func byteCount() throws -> Int64 {
+        guard FileManager.default.fileExists(atPath: root.path) else { return 0 }
+        return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.fileSizeKey]).reduce(0) {
+            $0 + Int64(try $1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+    }
     func allocate(extension suffix: String, session expected: UUID) throws -> URL {
         guard session == expected else { throw CancellationError() }
         guard GalleryOriginalFormats.extensions.contains(suffix) else { throw PrivateMediaStore.StoreError.invalidRecord }

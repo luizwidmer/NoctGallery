@@ -6,6 +6,10 @@ struct AssetDetailView: View {
     @EnvironmentObject private var model: GalleryViewModel
     @Environment(\.dismiss) private var dismiss
     let asset: PhotoAssetRecord
+    var sequence: [PhotoAssetRecord] = []
+    @State private var fullscreen = false
+    @State private var showsPhotoEditor = false
+    @State private var showsNotes = false
     @State private var showsMetadata = false
     @State private var confirmDelete = false
     @State private var copiedToPrivate = false
@@ -22,6 +26,8 @@ struct AssetDetailView: View {
                 .aspectRatio(previewAspectRatio, contentMode: .fit).frame(maxHeight: 560)
                 .background(.black.opacity(0.86)).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
+                Button("View Fullscreen", systemImage: "arrow.up.left.and.arrow.down.right") { fullscreen = true }
+
                 if asset.originalKind == .livePhoto, asset.source == .privateLibrary {
                     DisclosureGroup("Play Live Photo") {
                         GalleryVideoPlayer(asset: asset, motion: true)
@@ -35,6 +41,12 @@ struct AssetDetailView: View {
                           systemImage: asset.source == .photos ? "photo.stack" : "lock.shield")
                         .font(.headline)
                     LabeledContent("Date", value: asset.dateLabel)
+                    if let caption = model.organization.items[asset.id]?.caption, !caption.isEmpty {
+                        Text(caption).font(.headline)
+                    }
+                    if let notes = model.organization.items[asset.id]?.notes, !notes.isEmpty {
+                        DisclosureGroup("Private notes") { Text(notes).font(.footnote).textSelection(.enabled) }
+                    }
                     LabeledContent("Dimensions", value: asset.dimensionsLabel)
                     if let originalKind = asset.originalKind { LabeledContent("Original", value: originalKind.title) }
                     if asset.kind == .video { LabeledContent("Duration", value: asset.durationLabel) }
@@ -78,6 +90,10 @@ struct AssetDetailView: View {
                         Text("Copy saves a cleaned version and keeps the Photos original.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
+                        if asset.kind == .photo {
+                            Button("Edit Photo", systemImage: "crop.rotate") { showsPhotoEditor = true }.buttonStyle(.bordered)
+                        }
+                        Button("Caption & Notes", systemImage: "text.alignleft") { showsNotes = true }.buttonStyle(.bordered)
                         Button { showsOrganization = true } label: {
                             Label("Albums & Tags", systemImage: "folder").frame(maxWidth: .infinity)
                         }.buttonStyle(.bordered)
@@ -112,6 +128,11 @@ struct AssetDetailView: View {
         }
         .navigationTitle(asset.mediaTitle).navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showsOrganization) { GalleryOrganizeView(ids: [asset.id]) }
+        .sheet(isPresented: $showsPhotoEditor) { GalleryPhotoEditorView(asset: asset) }
+        .sheet(isPresented: $showsNotes) { GalleryNotesView(asset: asset) }
+        .fullScreenCover(isPresented: $fullscreen) {
+            GalleryFullscreenViewer(items: sequence.isEmpty ? [asset] : sequence, selectedID: asset.id)
+        }
         .sheet(isPresented: $showsMetadata) {
             MetadataEditorView(profile: asset.decoyProfile ?? MetadataForge.randomProfile(), mediaKind: asset.kind,
                                actionTitle: "Save Changes") { profile in
@@ -134,7 +155,7 @@ struct AssetDetailView: View {
     }
 }
 
-private struct GalleryVideoPlayer: View {
+struct GalleryVideoPlayer: View {
     @EnvironmentObject private var model: GalleryViewModel
     let asset: PhotoAssetRecord
     var motion = false
