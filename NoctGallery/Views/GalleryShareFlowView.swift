@@ -12,6 +12,8 @@ struct GalleryShareFlowView: View {
     @State private var showsMetadata = false
     @State private var detecting = false
     @State private var detectionTask: Task<[GalleryRedaction], Error>?
+    @State private var detectionID = UUID()
+    @State private var detectionOptions = GalleryDetectionOptions()
     @State private var suggestionStatus: String?
     @State private var frameTime = 0.0
     @State private var frameRevision = 0
@@ -30,9 +32,10 @@ struct GalleryShareFlowView: View {
     @State private var silenceStart = 0.0
     @State private var silenceEnd = 1.0
 
-    init(request: GalleryShareRequest) {
+    init(request: GalleryShareRequest, initialEdits: GalleryShareEdits = .init()) {
         self.request = request
         _profile = State(initialValue: request.profile)
+        _edits = State(initialValue: initialEdits)
     }
 
     private var asset: PhotoAssetRecord { request.assets[0] }
@@ -63,19 +66,22 @@ struct GalleryShareFlowView: View {
             }
         }
         .task(id: frameRevision) {
+            cancelDetection()
             if !loadedDefaults {
                 outputFormat = model.shareOutputFormat; maximumDimension = model.shareMaximumDimension; quality = model.shareLossyQuality
                 if isSingle && asset.kind == .photo { edits.photoEdits = model.organization.items[asset.id]?.photoEdits }
                 loadedDefaults = true
             }
             guard isSingle else { return }
+            image = nil
             do {
                 let loaded = try await model.shareEditorImage(for: asset, time: frameTime, photoEdits: edits.photoEdits)
                 guard !Task.isCancelled else { return }
                 image = loaded; previewError = nil; suggestions = []
             } catch { if !Task.isCancelled { previewError = error.localizedDescription } }
         }
-        .onDisappear { detectionTask?.cancel(); trackingWork?.cancel(); detectionTask = nil; image = nil; suggestions = [] }
+        .onChange(of: detectionOptions) { _, _ in cancelDetection() }
+        .onDisappear { cancelDetection(); trackingWork?.cancel(); image = nil }
         .alert("Save Sharing Preset", isPresented: $namesPreset) {
             TextField("Preset name", text: $presetName)
             Button("Cancel", role: .cancel) { }
@@ -93,24 +99,50 @@ struct GalleryShareFlowView: View {
                     if let image {
                         GalleryRedactionCanvas(image: image, masks: $edits.redactions, suggestions: $suggestions, selectedID: $selectedCover, time: frameTime)
                             .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                        Text("Tap dotted suggestions to accept them.")
+                        Text("Tap a dotted area to blur it, or accept all detected areas.")
                             .font(.footnote).foregroundStyle(.secondary)
                         HStack {
-                            Button("Suggest Faces & Text", systemImage: "viewfinder") { detect() }
-                                .disabled(detecting || edits.redactions.count >= 100)
+                            Button("Detect Sensitive Areas", systemImage: "viewfinder") { detect() }
+                                .disabled(detecting || !detectionOptions.hasDetectors || edits.redactions.count >= 100)
                             Spacer()
-                            if detecting { ProgressView() }
+                            if detecting { ProgressView(); Button("Cancel") { cancelDetection() } }
                             if !edits.redactions.isEmpty {
                                 Button("Clear", role: .destructive) { edits.redactions = [] }
                             }
                         }
+                        if !suggestions.isEmpty {
+                            HStack {
+                                Button("Blur All Suggested Areas") {
+                                    let accepted = suggestions.prefix(100 - edits.redactions.count).map { value in
+                                        var area = value; area.referenceTime = frameTime; return area
+                                    }
+                                    edits.redactions.append(contentsOf: accepted)
+                                    suggestions.removeAll { value in accepted.contains { $0.id == value.id } }
+                                    selectedCover = accepted.last?.id
+                                }.disabled(edits.redactions.count >= 100)
+                                Spacer()
+                                Button("Dismiss") { suggestions = []; suggestionStatus = nil }
+                            }
+                        }
+                        DisclosureGroup("Detection Options") {
+                            Toggle("Faces", isOn: $detectionOptions.faces)
+                            Picker("Text", selection: $detectionOptions.text) {
+                                ForEach(GalleryDetectionOptions.TextMode.allCases) { Text($0.title).tag($0) }
+                            }
+                            Toggle("QR & barcodes", isOn: $detectionOptions.codes)
+                            Picker("Sensitivity", selection: $detectionOptions.sensitivity) {
+                                ForEach(GalleryDetectionOptions.Sensitivity.allCases) { Text($0.title).tag($0) }
+                            }
+                            Text("Sensitive text looks for contact details, numbers and document labels. Thorough scanning may suggest more areas.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         if let suggestionStatus { Text(suggestionStatus).font(.footnote).foregroundStyle(.secondary) }
-                        Text("On-device suggestions can miss details. Review faces, plates and text.")
+                        Text("Detection stays on this device. It can miss details; inspect faces, plates, text and codes before sharing.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else if let previewError {
                         Text(previewError).foregroundStyle(.secondary)
                     } else { ProgressView("Loading preview…") }
-                } header: { Text("Cover sensitive details") }
+                } header: { Text("Blur sensitive details") }
                 if asset.kind == .video, asset.duration >= 0.1 {
                     Section("Video") {
                         LabeledContent("Preview frame", value: timeLabel(frameTime))
@@ -126,7 +158,7 @@ struct GalleryShareFlowView: View {
                             .accessibilityLabel("Trim end")
                         Toggle("Remove Audio", isOn: $edits.removeAudio)
                         if let index = edits.redactions.firstIndex(where: { $0.id == selectedCover }) {
-                            Button("Track Selected Cover Through Clip", systemImage: "viewfinder") { trackSelectedCover() }.disabled(tracking)
+                            Button("Track Selected Blur Through Clip", systemImage: "viewfinder") { trackSelectedCover() }.disabled(tracking)
                             Button("Add Manual Keyframe at Preview") {
                                 if edits.redactions[index].keyframes.isEmpty {
                                     let rect = edits.redactions[index].rect
@@ -136,15 +168,15 @@ struct GalleryShareFlowView: View {
                                 edits.redactions[index].setRect(rect, at: frameTime)
                             }
                             if !edits.redactions[index].keyframes.isEmpty {
-                                LabeledContent("Moving cover", value: "\(edits.redactions[index].keyframes.count) keyframes")
-                                Button("Make Cover Static") {
+                                LabeledContent("Moving blur", value: "\(edits.redactions[index].keyframes.count) keyframes")
+                                Button("Make Blur Static") {
                                     let rect = edits.redactions[index].rect(at: frameTime)
                                     edits.redactions[index].rect = rect; edits.redactions[index].keyframes = []
                                 }
                             }
                         }
                         if tracking { ProgressView("Tracking selected area…"); Button("Cancel Tracking") { trackingWork?.cancel() } }
-                        Text("Tracking and interpolation can miss motion. Scrub to adjust cover keyframes and review the whole export.")
+                        Text("Tracking and interpolation can miss motion. Scrub to adjust blur keyframes and review the whole export.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if !edits.removeAudio {
@@ -176,7 +208,7 @@ struct GalleryShareFlowView: View {
             } else {
                 Section {
                     Label("\(request.assets.count) items", systemImage: "square.stack")
-                    Text("One metadata choice applies to every copy. Open an item individually to cover details or trim video.")
+                    Text("One metadata choice applies to every copy. Open an item individually to blur details or trim video.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -225,7 +257,7 @@ struct GalleryShareFlowView: View {
                 if model.isProcessing { ProgressView(model.processingMessage ?? "Preparing…") }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             } footer: {
-                Text(isSingle ? "Your originals stay unchanged. Covers are burned into the shared copy." : "Your originals stay unchanged. Review each copy before sharing.")
+                Text(isSingle ? "Your originals stay unchanged. Blur is burned into the shared copy. Review the copy to check that details are obscured." : "Your originals stay unchanged. Review each copy before sharing.")
             }
         }
         .disabled(model.isProcessing)
@@ -272,22 +304,39 @@ struct GalleryShareFlowView: View {
 
     private func detect() {
         guard let cgImage = image?.cgImage else { return }
+        detectionTask?.cancel()
+        let id = UUID(); detectionID = id
         detecting = true
         suggestionStatus = nil
         let revision = frameRevision
+        let options = detectionOptions
         Task {
-            let task = Task.detached(priority: .userInitiated) { try GalleryRedactionSuggestions.detect(in: cgImage) }
+            guard detectionID == id else { return }
+            let task = Task { try await model.suggestSensitiveAreas(in: cgImage, options: options) }
             detectionTask = task
-            defer { detecting = false }
+            defer { if detectionID == id { detecting = false; detectionTask = nil } }
             do {
                 let found = try await task.value
-                guard model.privateUnlocked, revision == frameRevision, model.shareRequest?.id == request.id else { return }
+                guard detectionID == id, !task.isCancelled, model.lock.isUnlocked,
+                      revision == frameRevision, model.shareRequest?.id == request.id else { return }
                 suggestions = found
-                suggestionStatus = found.isEmpty ? "No suggestions found. Draw covers where needed." : "Found \(found.count) areas. Tap the ones to cover."
+                let counts = [(GalleryDetectionKind.face, "face"), (.text, "text area"), (.code, "code")]
+                    .compactMap { kind, name -> String? in
+                        let count = found.filter { $0.detectionKind == kind }.count
+                        return count == 0 ? nil : "\(count) \(name)\(count == 1 ? "" : "s")"
+                    }.joined(separator: ", ")
+                suggestionStatus = found.isEmpty ? "No suggestions found. Draw blur areas where needed." : "Found \(counts). Review the suggested areas."
             } catch {
-                if model.shareRequest?.id == request.id { suggestionStatus = "Suggestions unavailable. Draw covers where needed." }
+                if detectionID == id, !(error is CancellationError), model.shareRequest?.id == request.id {
+                    suggestionStatus = "Detection unavailable. Draw blur areas where needed."
+                }
             }
         }
+    }
+
+    private func cancelDetection() {
+        detectionID = UUID(); detectionTask?.cancel(); detectionTask = nil
+        detecting = false; suggestions = []; suggestionStatus = nil
     }
 
     private func trackSelectedCover() {
@@ -302,7 +351,7 @@ struct GalleryShareFlowView: View {
                 try Task.checkCancellation()
                 guard let current = edits.redactions.firstIndex(where: { $0.id == cover.id }), model.shareRequest?.id == request.id else { return }
                 guard edits.redactions[current] == cover, edits.trimStart == start, (edits.trimEnd ?? asset.duration) == end else {
-                    suggestionStatus = "The cover or clip changed. Track again using the current edits."
+                    suggestionStatus = "The blur area or clip changed. Track again using the current edits."
                     return
                 }
                 edits.redactions[current].keyframes = frames

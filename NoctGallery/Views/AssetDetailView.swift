@@ -47,6 +47,23 @@ struct AssetDetailView: View {
                     if let notes = model.organization.items[asset.id]?.notes, !notes.isEmpty {
                         DisclosureGroup("Private notes") { Text(notes).font(.footnote).textSelection(.enabled) }
                     }
+                    if asset.source == .privateLibrary, asset.kind == .photo, model.showsSmartSearch, model.organization.visualSearchEnabled == true {
+                        DisclosureGroup("AI Search Tags") {
+                            if let tags = model.organization.items[asset.id]?.visualTags {
+                                if tags.isEmpty { Text("No objects recognized confidently.").font(.footnote).foregroundStyle(.secondary) }
+                                ForEach(tags, id: \.label) { tag in
+                                    HStack {
+                                        Text(tag.label.capitalized)
+                                        Spacer()
+                                        Button("Remove \(tag.label)", systemImage: "xmark.circle") { Task { await model.organize([asset.id], edit: .removeVisualTag(tag.label)) } }
+                                            .labelStyle(.iconOnly)
+                                    }
+                                }
+                            } else { Text("Waiting to be tagged.").font(.footnote).foregroundStyle(.secondary) }
+                            Button("Refresh AI Tags", systemImage: "sparkles") { model.indexVisualTags(ids: [asset.id], refresh: true) }
+                                .disabled(model.isAnalyzing || !model.smartFeaturesAvailable)
+                        }
+                    }
                     LabeledContent("Dimensions", value: asset.dimensionsLabel)
                     if let originalKind = asset.originalKind { LabeledContent("Original", value: originalKind.title) }
                     if asset.kind == .video { LabeledContent("Duration", value: asset.durationLabel) }

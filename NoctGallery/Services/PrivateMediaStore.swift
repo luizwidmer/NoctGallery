@@ -329,6 +329,59 @@ actor PrivateMediaStore {
         return value
     }
 
+    func setVisualSearch(enabled: Bool, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        value.visualSearchEnabled = enabled
+        if !enabled { for id in Array(value.items.keys) { value.items[id]?.visualTags = nil } }
+        try saveOrganization(value)
+        return value
+    }
+
+    func editSearchAliases(_ edit: GallerySearchAliasEdit, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        var groups = value.effectiveSearchAliasGroups
+        switch edit {
+        case .save(let group, let existingID):
+            if let existingID {
+                guard group.id == existingID, let index = groups.firstIndex(where: { $0.id == existingID }) else { throw GallerySearchAliasError.missingGroup }
+                groups[index] = group
+            } else {
+                guard !groups.contains(where: { $0.id == group.id }) else { throw GallerySearchAliasError.missingGroup }
+                groups.append(group)
+            }
+            value.searchAliasGroups = groups
+        case .delete(let id):
+            guard groups.contains(where: { $0.id == id }) else { throw GallerySearchAliasError.missingGroup }
+            groups.removeAll { $0.id == id }; value.searchAliasGroups = groups
+        case .restoreDefaults: value.searchAliasGroups = nil
+        }
+        try saveOrganization(value)
+        return value
+    }
+
+    func setAIQueryInterpretation(enabled: Bool, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        value.aiQueryInterpretationEnabled = enabled
+        try saveOrganization(value)
+        return value
+    }
+
+    func setVisualTags(id: String, tags: [GalleryVisualTag], photoEdits: GalleryPhotoEdits? = nil, replacing previousTags: [GalleryVisualTag]? = nil, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        guard try record(id: id).asset.kind == .photo else { throw StoreError.invalidRecord }
+        var value = try organization()
+        guard value.visualSearchEnabled == true else { throw StoreError.invalidRecord }
+        var item = value.items[id] ?? .init()
+        guard item.photoEdits == photoEdits, item.visualTags == previousTags else { throw StoreError.invalidRecord }
+        item.visualTags = tags
+        value.items[id] = item
+        try saveOrganization(value)
+        return value
+    }
+
     /// Authenticate every saved byte and compare it with the imported original
     /// before Photos deletion. This check creates no plaintext output file.
     func verifySavedCopy(id: String, original: URL, session expected: UUID) throws {
@@ -422,7 +475,10 @@ actor PrivateMediaStore {
             case .favorite(let flag): item.favorite = flag
             case .tags(let tags): item.tags = tags
             case .description(let caption, let notes): item.caption = caption; item.notes = notes
-            case .photoEdits(let edits): item.photoEdits = try edits?.validated()
+            case .photoEdits(let edits):
+                item.photoEdits = try edits?.validated()
+                item.recognizedText = nil; item.visualTags = nil
+            case .removeVisualTag(let label): item.visualTags?.removeAll { $0.label == label }
             case .addToAlbum(let album):
                 guard value.albums.contains(where: { $0.id == album }) else { throw StoreError.invalidRecord }
                 item.albumIDs.insert(album)

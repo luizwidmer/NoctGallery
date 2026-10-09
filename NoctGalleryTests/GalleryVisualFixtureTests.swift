@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import UIKit
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import NoctGallery
 
@@ -9,7 +10,7 @@ import XCTest
 @MainActor
 final class GalleryVisualFixtureTests: XCTestCase {
     func testInstallDisposableVisualFixtures() async throws {
-        #if targetEnvironment(simulator)
+        try XCTSkipUnless(Self.isReviewHost, "Fixtures require a simulator or the isolated iOS app on Mac.")
         try XCTSkipUnless(Bundle.main.bundleIdentifier?.hasSuffix(".gallery-features.visual-review") == true,
             "Run only with the disposable Gallery visual-review bundle identifier.")
         let store = PrivateMediaStore()
@@ -58,6 +59,16 @@ final class GalleryVisualFixtureTests: XCTestCase {
                 _ = try await store.organize(ids: [saved[index].id], edit: .description(caption: captions[index], notes: index == 4 ? "The little path past the wildflowers leads down to the cove.\n\nCome back just before sunset. Bring a book and stay until the light is gone." : "A favorite moment from the weekend."), session: session)
             }
         }
+        for name in ["headphones", "portrait"] {
+            let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "jpg"))
+            let data = try Data(contentsOf: url)
+            let source = try await work.write(data, extension: "jpg", session: await work.currentSession())
+            let item = try await store.save(file: source, fileExtension: "jpg", kind: .photo, width: 1_024, height: 1_024,
+                duration: 0, thumbnail: data, profile: nil, session: session)
+            _ = try await store.organize(ids: [item.id], edit: .description(caption: name == "headphones" ? "A little listening time" : "A friend at the cafe",
+                notes: name == "headphones" ? "A new playlist for quiet afternoons." : "Coffee and a catch-up before the weekend."), session: session)
+            try await work.remove(source)
+        }
         let credentials = GalleryLockStore()
         try await credentials.reset()
         _ = try await credentials.configure(mode: .off, pin: "", keys: [])
@@ -67,16 +78,26 @@ final class GalleryVisualFixtureTests: XCTestCase {
         settings.presets = [DecoyPreset(name: "Weekend camera", profile: MetadataForge.randomProfile())]
         settings.sharingPresets = [.init(name: "Small silent copy", format: .jpeg, maximumDimension: 2_048, quality: 0.75, videoMaximumEdge: 960, removeAudio: true)]
         try GallerySettingsStore().save(settings)
-        #else
-        throw XCTSkip("Simulator fixtures only")
+        #if targetEnvironment(simulator)
+        if let url = Bundle(for: Self.self).url(forResource: "native-vision-classifications", withExtension: "json") {
+            let reference = try JSONDecoder().decode([String: [GalleryVisualTag]].self, from: Data(contentsOf: url))
+            _ = try await store.setVisualSearch(enabled: true, session: session)
+            let items = try await store.list(), organization = try await store.organization()
+            for item in items where item.kind == .photo {
+                let key = organization.items[item.id]?.caption ?? "fixture-live-photo"
+                // Legacy generated cards have no native photographic reference.
+                let tags = reference[key] ?? []
+                _ = try await store.setVisualTags(id: item.id, tags: tags, session: session)
+            }
+        }
         #endif
     }
 
     func testRenderUpgradeScreensInDisposableReviewApp() async throws {
-        #if targetEnvironment(simulator)
+        try XCTSkipUnless(Self.isReviewHost, "Rendering requires the isolated simulator or iOS app on Mac.")
         try XCTSkipUnless(Bundle.main.bundleIdentifier?.hasSuffix(".gallery-features.visual-review") == true,
             "Render only inside the isolated simulator review app.")
-        let model = GalleryViewModel(inbox: try? GalleryImportInbox.appInbox())
+        let model = GalleryViewModel(inbox: try? GalleryImportInbox.appInbox(), queryInterpreter: Self.reviewInterpreter)
         await model.start()
         let unlocked = await model.unlockPrivate()
         XCTAssertTrue(unlocked)
@@ -89,6 +110,40 @@ final class GalleryVisualFixtureTests: XCTestCase {
             for _ in 0..<200 where model.isAnalyzing { try await Task.sleep(for: .milliseconds(100)) }
             XCTAssertFalse(model.isAnalyzing)
         }
+        #if targetEnvironment(simulator)
+        try XCTSkipUnless(Bundle(for: Self.self).url(forResource: "native-vision-classifications", withExtension: "json") != nil,
+            "This simulator classifier is unsupported; render using genuine Vision reference results exported by the native iOS-on-Mac test.")
+        #endif
+        await model.setVisualSearch(true)
+        for _ in 0..<400 {
+            if model.untaggedPhotoCount == 0 && !model.isAnalyzing { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(model.untaggedPhotoCount, 0, model.errorMessage ?? "Expected automatic AI tagging")
+        await model.setAIQueryInterpretation(true)
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            var reference: [String: [GalleryVisualTag]] = [:]
+            for item in model.privateAssets where item.kind == .photo {
+                let key = model.organization.items[item.id]?.caption ?? "fixture-live-photo"
+                reference[key] = model.organization.items[item.id]?.visualTags
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let attachment = XCTAttachment(data: try encoder.encode(reference), uniformTypeIdentifier: UTType.json.identifier)
+            attachment.name = "native-vision-classifications"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        let headphones = try XCTUnwrap(model.privateAssets.first { model.organization.items[$0.id]?.caption == "A little listening time" })
+        XCTAssertTrue(model.organization.matches("headphones", id: headphones.id))
+        let synonyms = GallerySearchAliasGroup(terms: ["sunglasses", "shades", "óculos de sol"])
+        let savedSynonyms = await model.editSearchAliases(.save(synonyms))
+        XCTAssertTrue(savedSynonyms)
+        if Self.hasMarketingMedia { XCTAssertTrue(model.organization.matches("shades", id: document.id)) }
+        let portrait = try XCTUnwrap(model.privateAssets.first { model.organization.items[$0.id]?.caption == "A friend at the cafe" })
+        let loadedPortrait = try await model.shareEditorImage(for: portrait)
+        let portraitImage = try XCTUnwrap(loadedPortrait.cgImage)
+        let faceMasks = try await Task.detached {
+            try GalleryRedactionSuggestions.detect(in: portraitImage, options: .init(faces: true, text: .off, codes: false))
+        }.value
+        XCTAssertFalse(faceMasks.isEmpty)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let screens: [(String, AnyView)] = [
             ("library", AnyView(GalleryView(source: .privateLibrary))),
@@ -100,6 +155,12 @@ final class GalleryVisualFixtureTests: XCTestCase {
             ("video-share", AnyView(GalleryShareFlowView(request: .init(assets: [video], profile: nil)))),
             ("storage", AnyView(NavigationStack { GalleryStorageView() })),
             ("text-search", AnyView(NavigationStack { GalleryTextSearchView() })),
+            ("smart-search", AnyView(NavigationStack { GallerySmartSearchView() })),
+            ("search-synonyms", AnyView(NavigationStack { GallerySearchAliasesView() })),
+            ("synonym-editor", AnyView(NavigationStack { GallerySearchAliasEditor(group: synonyms, isNew: false) })),
+            ("shades-search", AnyView(GalleryView(source: .privateLibrary, initialSearchText: "shades"))),
+            ("headphones-search", AnyView(GalleryView(source: .privateLibrary, initialSearchText: "headphones"))),
+            ("face-blur", AnyView(GalleryShareFlowView(request: .init(assets: [portrait], profile: nil), initialEdits: .init(redactions: faceMasks)))),
             ("inbox", AnyView(NavigationStack { GalleryInboxView() })),
             ("settings", AnyView(GallerySettingsView()))
         ]
@@ -112,16 +173,28 @@ final class GalleryVisualFixtureTests: XCTestCase {
             host.view.setNeedsLayout(); host.view.layoutIfNeeded()
             // Let visible cells finish their asynchronous thumbnail loads before capture.
             try await Task.sleep(for: .milliseconds(name == "library" ? 2_000 : 750))
+            if name == "semantic-search" {
+                for _ in 0..<200 where model.interpretedSearch == nil { try await Task.sleep(for: .milliseconds(50)) }
+                XCTAssertNotNil(model.interpretedSearch, model.searchInterpretationMessage ?? "Expected real AI query interpretation")
+                // The filtered thumbnail starts loading only after the AI plan
+                // publishes; give that new visible cell time to finish too.
+                try await Task.sleep(for: .milliseconds(750))
+            }
             host.view.setNeedsLayout(); host.view.layoutIfNeeded()
             let renderer = UIGraphicsImageRenderer(bounds: host.view.bounds)
             let image = renderer.image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
             XCTAssertGreaterThan(image.size.width, 300)
             let attachment = XCTAttachment(image: image)
-            attachment.name = "upgrade-\(UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")-\(name)"
+            let platform = ProcessInfo.processInfo.isiOSAppOnMac ? "mac" : (UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")
+            attachment.name = "upgrade-\(platform)-\(name)"
             attachment.lifetime = .keepAlways; add(attachment)
             window.isHidden = true; window.rootViewController = nil
         }
         for (name, screen) in screens { try await capture(name, screen) }
+        if ProcessInfo.processInfo.isiOSAppOnMac, model.queryInterpreterAvailability.isAvailable {
+            try await capture("semantic-search", AnyView(GalleryView(source: .privateLibrary,
+                initialSearchText: "the things you wear on your ears to hear music")))
+        }
         if Self.hasMarketingMedia {
             var edits = GalleryShareEdits()
             edits.redactions = [.init(rect: CGRect(x: 0.405, y: 0.414, width: 0.205, height: 0.05)),
@@ -132,11 +205,96 @@ final class GalleryVisualFixtureTests: XCTestCase {
             try await capture("review", AnyView(GalleryShareFlowView(request: .init(assets: [document], profile: nil))))
             model.finishShare()
         }
+        model.beginShare([portrait])
+        await model.prepareShares(assets: [portrait], configuration: GalleryPreferences.configuration(format: "png", maximumDimension: 4_096, quality: 0.9), profile: nil, edits: .init(redactions: faceMasks))
+        XCTAssertNotNil(model.sharePayload, model.errorMessage ?? "Expected an actual photo with blur burned in")
+        try await capture("face-blur-export", AnyView(GalleryShareFlowView(request: .init(assets: [portrait], profile: nil))))
+        model.finishShare()
         await model.lockPrivate()
         await model.purgeAndReset()
         XCTAssertFalse(model.resetNeedsRetry, "The disposable review app must remove its fixture keys and media")
+    }
+
+    func testRenderSmartFeatureDefaultsAndAvailabilityStates() async throws {
+        try XCTSkipUnless(Self.isReviewHost && Bundle.main.bundleIdentifier?.hasSuffix(".gallery-features.visual-review") == true,
+            "Availability screenshots require the isolated review app.")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let states: [(GalleryQueryInterpreterAvailability.State, String)] = [
+            (.ready, "smart-defaults-off"), (.unsupported, "settings-smart-unsupported"),
+            (.intelligenceDisabled, "smart-intelligence-off"), (.modelNotReady, "smart-model-downloading")
+        ]
+        for (state, name) in states {
+            let suite = "GalleryAvailabilityUI-" + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let settings = GallerySettingsStore(service: suite, defaults: defaults)
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+            let credentials = GalleryLockStore(persistence: MemoryGalleryLockPersistence())
+            _ = try await credentials.configure(mode: .off, pin: "", keys: [])
+            let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root.appendingPathComponent("exports")),
+                privateStore: PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys()),
+                workStore: MediaWorkStore(root: root.appendingPathComponent("work")), defaults: defaults,
+                lock: GalleryLockController(store: credentials), preferencesDomain: suite, settingsStore: settings,
+                queryInterpreter: AvailabilityFixtureInterpreter(state: state))
+            await model.start(); let unlocked = await model.unlockPrivate(); XCTAssertTrue(unlocked)
+            XCTAssertFalse(model.organization.visualSearchEnabled == true)
+            XCTAssertFalse(model.organization.aiQueryInterpretationEnabled == true)
+            XCTAssertEqual(model.showsSmartSearch, state != .unsupported)
+            XCTAssertEqual(model.smartFeaturesAvailable, state == .ready)
+            let screens = state == .intelligenceDisabled
+                ? [(name, AnyView(NavigationStack { GallerySmartSearchView() })), ("settings-smart-intelligence-off", AnyView(GallerySettingsView()))]
+                : [(name, state == .unsupported ? AnyView(GallerySettingsView()) : AnyView(NavigationStack { GallerySmartSearchView() }))]
+            for (screenName, screen) in screens {
+                let window = UIWindow(windowScene: scene); window.frame = scene.screen.bounds
+                let host = UIHostingController(rootView: screen.environmentObject(model).environmentObject(model.lock))
+                window.rootViewController = host; window.makeKeyAndVisible()
+                try await Task.sleep(for: .milliseconds(750))
+                host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+                    host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                let platform = ProcessInfo.processInfo.isiOSAppOnMac ? "mac" : (UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")
+                attachment.name = "upgrade-\(platform)-\(screenName)"; attachment.lifetime = .keepAlways; add(attachment)
+                window.isHidden = true; window.rootViewController = nil
+            }
+            await model.lockPrivate()
+            try settings.purge(); defaults.removePersistentDomain(forName: suite)
+            try FileManager.default.removeItem(at: root)
+        }
+    }
+
+    private static var reviewInterpreter: any GallerySearchQueryInterpreting {
+        #if targetEnvironment(simulator)
+        // Readiness is injected only for UI layout; the interpreter still calls
+        // the real model and cannot manufacture functional AI search results.
+        AvailabilityFixtureInterpreter(state: .ready)
         #else
-        throw XCTSkip("Simulator rendering only")
+        GalleryAIQueryInterpreter()
+        #endif
+    }
+
+    private struct AvailabilityFixtureInterpreter: GallerySearchQueryInterpreting {
+        let state: GalleryQueryInterpreterAvailability.State
+        var availability: GalleryQueryInterpreterAvailability {
+            let message: String
+            switch state {
+            case .unsupported: message = "Smart Search requires a device that supports Apple Intelligence."
+            case .intelligenceDisabled: message = "Turn on Apple Intelligence in system Settings to enable Smart Search. Tagging and AI search are unavailable while Apple Intelligence is off."
+            case .modelNotReady: message = "Apple Intelligence's local model isn't ready yet. Smart Search will be available once the model is ready."
+            case .ready: message = "Apple Intelligence is ready on this device. Smart features stay off until you enable them. Photo tags are in English."
+            }
+            return .init(state: state, message: message)
+        }
+        func interpret(_ query: String, labels: [String]) async throws -> GallerySearchQueryPlan {
+            try await GalleryAIQueryInterpreter().interpret(query, labels: labels)
+        }
+    }
+
+    private static var isReviewHost: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        ProcessInfo.processInfo.isiOSAppOnMac
         #endif
     }
 

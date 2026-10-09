@@ -1,0 +1,434 @@
+{
+  "A friend at the cafe" : [
+    {
+      "confidence" : 0.91845703,
+      "label" : "adult"
+    },
+    {
+      "confidence" : 0.91845703,
+      "label" : "people"
+    },
+    {
+      "confidence" : 0.75247353,
+      "label" : "art"
+    },
+    {
+      "confidence" : 0.7524647,
+      "label" : "decoration"
+    },
+    {
+      "confidence" : 0.7524414,
+      "label" : "frame"
+    },
+    {
+      "confidence" : 0.7000519,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.6459961,
+      "label" : "foliage"
+    },
+    {
+      "confidence" : 0.5318364,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.5317383,
+      "label" : "decorative plant"
+    },
+    {
+      "confidence" : 0.53125,
+      "label" : "wood processed"
+    },
+    {
+      "confidence" : 0.15332113,
+      "label" : "clothing"
+    }
+  ],
+  "A little listening time" : [
+    {
+      "confidence" : 0.9526367,
+      "label" : "headphones"
+    },
+    {
+      "confidence" : 0.7436525,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.74365234,
+      "label" : "wood processed"
+    },
+    {
+      "confidence" : 0.29061297,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.2697754,
+      "label" : "foliage"
+    },
+    {
+      "confidence" : 0.20727539,
+      "label" : "decorative plant"
+    },
+    {
+      "confidence" : 0.2016602,
+      "label" : "document"
+    },
+    {
+      "confidence" : 0.20166016,
+      "label" : "book"
+    }
+  ],
+  "A slow morning" : [
+    {
+      "confidence" : 0.97509766,
+      "label" : "coffee"
+    },
+    {
+      "confidence" : 0.97509766,
+      "label" : "drink"
+    },
+    {
+      "confidence" : 0.97509766,
+      "label" : "liquid"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "baked goods"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "bread"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "croissant"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "food"
+    },
+    {
+      "confidence" : 0.91702485,
+      "label" : "tableware"
+    },
+    {
+      "confidence" : 0.91702485,
+      "label" : "utensil"
+    },
+    {
+      "confidence" : 0.84375,
+      "label" : "cup"
+    },
+    {
+      "confidence" : 0.79833984,
+      "label" : "plate"
+    },
+    {
+      "confidence" : 0.41053107,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.40844727,
+      "label" : "foliage"
+    },
+    {
+      "confidence" : 0.31672093,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.31005862,
+      "label" : "furniture"
+    },
+    {
+      "confidence" : 0.3100586,
+      "label" : "table"
+    },
+    {
+      "confidence" : 0.26475608,
+      "label" : "material"
+    },
+    {
+      "confidence" : 0.26464844,
+      "label" : "textile"
+    },
+    {
+      "confidence" : 0.1694336,
+      "label" : "wood processed"
+    },
+    {
+      "confidence" : 0.15576172,
+      "label" : "decorative plant"
+    }
+  ],
+  "First light at the lake" : [
+    {
+      "confidence" : 0.7343756,
+      "label" : "liquid"
+    },
+    {
+      "confidence" : 0.7343756,
+      "label" : "water"
+    },
+    {
+      "confidence" : 0.734375,
+      "label" : "lake"
+    },
+    {
+      "confidence" : 0.734375,
+      "label" : "water body"
+    },
+    {
+      "confidence" : 0.48874444,
+      "label" : "outdoor"
+    },
+    {
+      "confidence" : 0.46726307,
+      "label" : "land"
+    },
+    {
+      "confidence" : 0.46704102,
+      "label" : "mountain"
+    },
+    {
+      "confidence" : 0.3150238,
+      "label" : "sky"
+    },
+    {
+      "confidence" : 0.27001953,
+      "label" : "cloudy"
+    },
+    {
+      "confidence" : 0.25976562,
+      "label" : "sunset sunrise"
+    }
+  ],
+  "Lisbon weekend" : [
+    {
+      "confidence" : 0.6235356,
+      "label" : "optical equipment"
+    },
+    {
+      "confidence" : 0.62353516,
+      "label" : "sunglasses"
+    },
+    {
+      "confidence" : 0.38264948,
+      "label" : "material"
+    },
+    {
+      "confidence" : 0.38232422,
+      "label" : "textile"
+    },
+    {
+      "confidence" : 0.18904157,
+      "label" : "outdoor"
+    },
+    {
+      "confidence" : 0.18903255,
+      "label" : "sky"
+    },
+    {
+      "confidence" : 0.18798828,
+      "label" : "cloudy"
+    },
+    {
+      "confidence" : 0.1741736,
+      "label" : "document"
+    },
+    {
+      "confidence" : 0.17016602,
+      "label" : "printed page"
+    }
+  ],
+  "One more hour by the sea" : [
+    {
+      "confidence" : 0.8184289,
+      "label" : "outdoor"
+    },
+    {
+      "confidence" : 0.77326506,
+      "label" : "sky"
+    },
+    {
+      "confidence" : 0.7105052,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.7104492,
+      "label" : "rocks"
+    },
+    {
+      "confidence" : 0.7060547,
+      "label" : "blue sky"
+    },
+    {
+      "confidence" : 0.6147461,
+      "label" : "sunset sunrise"
+    },
+    {
+      "confidence" : 0.6136518,
+      "label" : "land"
+    },
+    {
+      "confidence" : 0.61035156,
+      "label" : "hill"
+    },
+    {
+      "confidence" : 0.604684,
+      "label" : "liquid"
+    },
+    {
+      "confidence" : 0.604684,
+      "label" : "water"
+    },
+    {
+      "confidence" : 0.604684,
+      "label" : "water body"
+    },
+    {
+      "confidence" : 0.60302734,
+      "label" : "ocean"
+    },
+    {
+      "confidence" : 0.23876953,
+      "label" : "shore"
+    },
+    {
+      "confidence" : 0.22631836,
+      "label" : "cloudy"
+    },
+    {
+      "confidence" : 0.20239258,
+      "label" : "lake"
+    },
+    {
+      "confidence" : 0.16577573,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.15771484,
+      "label" : "foliage"
+    }
+  ],
+  "The long way home" : [
+    {
+      "confidence" : 0.8248777,
+      "label" : "outdoor"
+    },
+    {
+      "confidence" : 0.82421875,
+      "label" : "alley"
+    },
+    {
+      "confidence" : 0.82421875,
+      "label" : "land"
+    },
+    {
+      "confidence" : 0.82421875,
+      "label" : "path"
+    },
+    {
+      "confidence" : 0.22886834,
+      "label" : "sky"
+    },
+    {
+      "confidence" : 0.22436523,
+      "label" : "cloudy"
+    },
+    {
+      "confidence" : 0.15935689,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.15541634,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.1508789,
+      "label" : "decorative plant"
+    }
+  ],
+  "fixture-live-photo" : [
+    {
+      "confidence" : 0.97509766,
+      "label" : "coffee"
+    },
+    {
+      "confidence" : 0.97509766,
+      "label" : "drink"
+    },
+    {
+      "confidence" : 0.97509766,
+      "label" : "liquid"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "baked goods"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "bread"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "croissant"
+    },
+    {
+      "confidence" : 0.96191406,
+      "label" : "food"
+    },
+    {
+      "confidence" : 0.91702485,
+      "label" : "tableware"
+    },
+    {
+      "confidence" : 0.91702485,
+      "label" : "utensil"
+    },
+    {
+      "confidence" : 0.84375,
+      "label" : "cup"
+    },
+    {
+      "confidence" : 0.79833984,
+      "label" : "plate"
+    },
+    {
+      "confidence" : 0.41053107,
+      "label" : "plant"
+    },
+    {
+      "confidence" : 0.40844727,
+      "label" : "foliage"
+    },
+    {
+      "confidence" : 0.31672093,
+      "label" : "structure"
+    },
+    {
+      "confidence" : 0.31005862,
+      "label" : "furniture"
+    },
+    {
+      "confidence" : 0.3100586,
+      "label" : "table"
+    },
+    {
+      "confidence" : 0.26475608,
+      "label" : "material"
+    },
+    {
+      "confidence" : 0.26464844,
+      "label" : "textile"
+    },
+    {
+      "confidence" : 0.1694336,
+      "label" : "wood processed"
+    },
+    {
+      "confidence" : 0.15576172,
+      "label" : "decorative plant"
+    }
+  ]
+}

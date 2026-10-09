@@ -26,6 +26,12 @@ struct GalleryView: View {
     @State private var showsImport = false
     @State private var showsInbox = false
     @State private var showsDuplicates = false
+    @State private var showsSmartSearch = false
+
+    init(source: GallerySource = .photos, initialSearchText: String = "") {
+        self.source = source
+        _searchText = State(initialValue: initialSearchText)
+    }
 
     private var selectedAssets: [PhotoAssetRecord] {
         (source == .photos ? model.assets : model.privateAssets).filter { selection.contains($0.id) }
@@ -33,6 +39,8 @@ struct GalleryView: View {
 
     private var filteredAssets: [PhotoAssetRecord] {
         let assets = source == .photos ? model.assets : model.privateAssets
+        let matcher = model.organization.searchMatcher
+        let interpretation = model.interpretedSearch.flatMap { $0.query == String(searchText.prefix(512)) ? $0.plan : nil }
         let result = assets.filter { asset in
             formatFilter.matches(asset) &&
             (tagFilter.isEmpty || model.organization.items[asset.id]?.tags.contains(tagFilter) == true) &&
@@ -41,11 +49,10 @@ struct GalleryView: View {
             (filter == "all" || asset.kind.rawValue == filter) &&
             (collection == "all" || (collection == "favorites" && model.organization.items[asset.id]?.favorite == true)
                 || (UUID(uuidString: collection).map { id in model.organization.items[asset.id]?.albumIDs.contains(id) == true } ?? false)) &&
-            (searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-             || asset.dateLabel.localizedCaseInsensitiveContains(searchText)
-             || asset.dimensionsLabel.localizedCaseInsensitiveContains(searchText)
-             || asset.mediaTitle.localizedCaseInsensitiveContains(searchText)
-             || (source == .privateLibrary && model.organization.searchText(for: asset.id).localizedCaseInsensitiveContains(searchText)))
+            (source == .privateLibrary
+                ? model.organization.matches(searchText, id: asset.id, extraText: asset.dateLabel + " " + asset.dimensionsLabel + " " + asset.mediaTitle,
+                    using: matcher, interpretation: interpretation)
+                : GalleryVisualSearch.matches(searchText, text: asset.dateLabel + " " + asset.dimensionsLabel + " " + asset.mediaTitle, tags: []))
         }
         return GalleryLibraryQuery.sorted(result, by: sort, sizes: model.storageItems)
     }
@@ -67,6 +74,19 @@ struct GalleryView: View {
                             ForEach(model.organization.albums) { collectionButton($0.name, id: $0.id.uuidString, icon: "folder") }
                         }.padding(.horizontal, 16).padding(.bottom, 10)
                     }
+                    if !searchText.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if model.interpretingSearchQuery == String(searchText.prefix(512)) {
+                                ProgressView("Interpreting search…").font(.footnote)
+                            } else if let interpreted = model.interpretedSearch, interpreted.query == String(searchText.prefix(512)) {
+                                Label("AI: \(interpreted.plan.displayTerms)", systemImage: "sparkles").font(.footnote)
+                                Text(interpreted.plan.matchScopeDescription).font(.caption)
+                            } else if let message = model.searchInterpretationMessage {
+                                Text(message).font(.caption)
+                            }
+                        }.foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).padding(.bottom, 8)
+                    }
                 }
                 if model.isLoading { Spacer(); ProgressView("Reading library…"); Spacer() }
                 else if filteredAssets.isEmpty {
@@ -74,13 +94,16 @@ struct GalleryView: View {
                         Label(searchText.isEmpty ? (source == .privateLibrary ? "Your Private Gallery" : "No Media Available") : "No Matches",
                               systemImage: source == .privateLibrary ? "lock.rectangle.stack" : "photo.stack")
                     } description: {
-                        Text(source == .privateLibrary
+                        Text(!searchText.isEmpty ? (source == .privateLibrary ? (model.showsSmartSearch ? "Try another word, or open Smart Search to check photo tagging." : "Try another tag, note or media detail.") : "Try another date, format or media type.") : source == .privateLibrary
                              ? "Take a private photo or video, or copy selected media from the Photos tab."
                              : "Photos and videos you allow access to appear here.")
                     } actions: {
-                        if source == .privateLibrary {
-                            Button("Open Private Camera", systemImage: "camera") { showCamera = true }
-                                .buttonStyle(.borderedProminent)
+                        if source == .privateLibrary, searchText.isEmpty {
+                            Button("Open Private Camera", systemImage: "camera") { showCamera = true }.buttonStyle(.borderedProminent)
+                        } else if source == .privateLibrary, model.showsSmartSearch {
+                            Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }
+                                .buttonStyle(.borderedProminent).disabled(!model.smartFeaturesAvailable)
+                            if !model.smartFeaturesAvailable { Text(model.queryInterpreterAvailability.message).font(.footnote) }
                         }
                     }
                 } else {
@@ -109,7 +132,7 @@ struct GalleryView: View {
                 }
             }
             .navigationTitle(source == .photos ? "Photos" : "Private")
-            .searchable(text: $searchText, prompt: source == .privateLibrary ? "Dates, tags, notes or text" : "Dates, dimensions or type")
+            .searchable(text: $searchText, prompt: source == .privateLibrary ? (model.showsSmartSearch ? "Objects, scenes, tags or text" : "Tags, notes or media details") : "Dates, dimensions or type")
             .autocorrectionDisabled().textInputAutocapitalization(.never)
             .navigationDestination(for: PhotoAssetRecord.self) { AssetDetailView(asset: $0, sequence: filteredAssets) }
             .toolbar {
@@ -124,6 +147,10 @@ struct GalleryView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button("Albums", systemImage: "folder") { showsAlbums = true }
+                            if model.showsSmartSearch {
+                                Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }
+                                    .disabled(!model.smartFeaturesAvailable)
+                            }
                             Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }
                             Button("Incoming Shares", systemImage: "tray.and.arrow.down") { showsInbox = true }
                             Button("Find Duplicates", systemImage: "square.on.square") { showsDuplicates = true }
@@ -141,6 +168,7 @@ struct GalleryView: View {
             }
             .safeAreaInset(edge: .bottom) { if selecting { selectionBar } }
             .sheet(isPresented: $showsAlbums) { GalleryAlbumsView() }
+            .sheet(isPresented: $showsSmartSearch) { NavigationStack { GallerySmartSearchView() } }
             .sheet(isPresented: $showsOrganize) { GalleryOrganizeView(ids: selection) }
             .sheet(isPresented: $showsFilters) { filterSheet }
             .sheet(isPresented: $showsInbox) { NavigationStack { GalleryInboxView() } }
@@ -152,6 +180,8 @@ struct GalleryView: View {
                 }
             }
             .task(id: model.privateAssets.count) { if source == .privateLibrary { await model.refreshStorage() } }
+            .task(id: queryRequest) { if source == .privateLibrary { await model.interpretSearchQuery(searchText) } }
+            .onDisappear { if source == .privateLibrary { model.clearSearchInterpretation() } }
             .confirmationDialog("Delete \(selection.count) private items?", isPresented: $confirmsDelete) {
                 Button("Delete Permanently", role: .destructive) {
                     batchBusy = true
@@ -163,6 +193,18 @@ struct GalleryView: View {
             }
             .fullScreenCover(isPresented: $showCamera) { PrivateCameraView() }
         }
+    }
+
+    private struct QueryRequest: Equatable {
+        let text: String, generation: UUID, enabled: Bool, available: Bool
+        let groups: [GallerySearchAliasGroup]
+        let labels: [String]
+    }
+    private var queryRequest: QueryRequest {
+        .init(text: String(searchText.prefix(512)), generation: model.privateGeneration,
+              enabled: model.organization.visualSearchEnabled == true && model.organization.aiQueryInterpretationEnabled == true,
+              available: model.queryInterpreterAvailability.isAvailable,
+              groups: model.organization.effectiveSearchAliasGroups, labels: model.queryVocabulary)
     }
 
     private func collectionButton(_ title: String, id: String, icon: String) -> some View {

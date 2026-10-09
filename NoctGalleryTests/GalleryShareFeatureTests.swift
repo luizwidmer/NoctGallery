@@ -28,7 +28,10 @@ final class GalleryShareFeatureTests: XCTestCase {
             redactions: [.init(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.25))]))
         let source = try XCTUnwrap(CGImageSourceCreateWithData(edited.data as CFData, nil))
         let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
-        XCTAssertLessThan(try pixel(image, x: 10, y: 5), 5, "Top-left cover must be black")
+        let blurred = try pixel(image, x: 10, y: 5)
+        XCTAssertGreaterThan(blurred, 60, "Blur must replace detail without a black rectangle")
+        XCTAssertLessThan(blurred, 220)
+        XCTAssertLessThan(abs(Int(blurred) - Int(try pixel(image, x: 11, y: 5))), 15, "High-frequency detail must be smoothed")
         XCTAssertGreaterThan(try pixel(image, x: 10, y: 70), 245, "Bottom-left pixels must stay white")
         XCTAssertGreaterThan(try pixel(image, x: 75, y: 5), 245)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
@@ -54,6 +57,27 @@ final class GalleryShareFeatureTests: XCTestCase {
         XCTAssertEqual(CVPixelBufferCreate(nil, 100, 80, kCVPixelFormatType_32BGRA, nil, &buffer), kCVReturnSuccess)
         XCTAssertThrowsError(try GalleryShareEdits(redactions: [.init(rect: CGRect(x: 2, y: 0, width: 1, height: 1))])
             .redact(try XCTUnwrap(buffer)))
+        let moving = GalleryRedaction(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.5), keyframes: [
+            .init(time: 0, rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.5)),
+            .init(time: 1, rect: CGRect(x: 0.5, y: 0, width: 0.5, height: 0.5))])
+        XCTAssertThrowsError(try GalleryShareEdits(redactions: [moving]).redact(try XCTUnwrap(buffer), at: .nan))
+    }
+
+    func testBlurReplacesPartlyTransparentPixelsWithoutBlendingBackOriginalDetail() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 60, height: 60, bitsPerComponent: 8, bytesPerRow: 240,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+        context.setBlendMode(.copy)
+        context.setFillColor(CGColor(gray: 0, alpha: 0.5)); context.fill(CGRect(x: 0, y: 0, width: 60, height: 60))
+        context.setFillColor(CGColor(gray: 1, alpha: 0.5))
+        for y in 0..<60 { for x in 0..<60 where (x + y).isMultiple(of: 2) {
+            context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+        } }
+        let source = try XCTUnwrap(context.makeImage())
+        let blurred = try GalleryShareEdits(redactions: [.init(rect: CGRect(x: 0, y: 0, width: 1, height: 1))]).redact(source)
+        XCTAssertLessThan(abs(Int(try pixel(blurred, x: 25, y: 25)) - Int(try pixel(blurred, x: 26, y: 25))), 10)
+        XCTAssertGreaterThan(abs(Int(try pixel(source, x: 25, y: 25)) - Int(try pixel(source, x: 26, y: 25))), 100,
+                             "The original translucent detail must stay untouched")
     }
 
     func testVideoPixelMasksUseTopLeftCoordinatesAndNeverOverwritePadding() throws {
@@ -64,12 +88,19 @@ final class GalleryShareFeatureTests: XCTestCase {
         let pointer = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixel))
         let stride = CVPixelBufferGetBytesPerRow(pixel)
         memset(pointer, 255, stride * 80)
+        let source = pointer.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<20 { for x in 0..<50 {
+            let value: UInt8 = (x + y).isMultiple(of: 2) ? 0 : 255
+            for channel in 0..<3 { source[y * stride + x * 4 + channel] = value }
+        } }
         CVPixelBufferUnlockBaseAddress(pixel, [])
         try GalleryShareEdits(redactions: [.init(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.25))]).redact(pixel)
         CVPixelBufferLockBaseAddress(pixel, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixel, .readOnly) }
         let values = pointer.assumingMemoryBound(to: UInt8.self)
-        XCTAssertEqual(values[5 * stride + 10 * 4], 0)
+        XCTAssertGreaterThan(values[5 * stride + 10 * 4], 60)
+        XCTAssertLessThan(values[5 * stride + 10 * 4], 220)
+        XCTAssertLessThan(abs(Int(values[5 * stride + 10 * 4]) - Int(values[5 * stride + 11 * 4])), 15)
         XCTAssertEqual(values[5 * stride + 10 * 4 + 3], 255)
         XCTAssertEqual(values[70 * stride + 10 * 4], 255)
         if stride > 400 { XCTAssertEqual(values[400], 255) }
@@ -87,6 +118,10 @@ final class GalleryShareFeatureTests: XCTestCase {
         let context = try XCTUnwrap(CGContext(data: nil, width: 100, height: 80, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 100, height: 80))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        for y in 0..<20 { for x in 0..<50 where (x + y).isMultiple(of: 2) {
+            context.fill(CGRect(x: x, y: 79 - y, width: 1, height: 1))
+        } }
         let data = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), [

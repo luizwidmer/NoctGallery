@@ -140,8 +140,12 @@ final class VideoSanitizerTests: XCTestCase {
             let expected = cover.rect(at: outputTime + 0.2)
             let center = (Int(expected.midY * Double(frame.height)) * frame.width + Int(expected.midX * Double(frame.width))) * 4
             let uncovered = ((frame.height - 4) * frame.width + 4) * 4
-            XCTAssertLessThan(samples[center], 8, "Covers must move at original timestamps even when the clip is trimmed")
+            XCTAssertGreaterThan(samples[center], 60, "Blur must retain color instead of inserting black")
+            XCTAssertLessThan(samples[center], 200)
+            XCTAssertLessThan(abs(Int(samples[center]) - Int(samples[center + 8])), 25,
+                              "Blur must smooth the area at its original timestamp after trimming")
             XCTAssertGreaterThan(samples[uncovered], 30, "Content outside the cover must survive")
+            XCTAssertGreaterThan(abs(Int(samples[uncovered]) - Int(samples[uncovered + 8])), 60)
         }
     }
 
@@ -188,8 +192,11 @@ final class VideoSanitizerTests: XCTestCase {
         let samples = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
         let topLeft = (2 * frame.width + 2) * 4
         let bottomRight = ((frame.height - 3) * frame.width + frame.width - 3) * 4
-        XCTAssertLessThan(samples[topLeft], 5, "The cover follows upright coordinates after rotation")
+        XCTAssertGreaterThan(samples[topLeft], 60)
+        XCTAssertLessThan(samples[topLeft], 200)
+        XCTAssertLessThan(abs(Int(samples[topLeft]) - Int(samples[topLeft + 8])), 25, "Blur follows upright coordinates after rotation")
         XCTAssertGreaterThan(samples[bottomRight], 20, "Uncovered content must survive")
+        XCTAssertGreaterThan(abs(Int(samples[bottomRight]) - Int(samples[bottomRight - 8])), 60)
         let cancelled = directory.appendingPathComponent("cancelled.mov")
         let task = Task {
             try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: cancelled, profile: nil)
@@ -292,7 +299,12 @@ final class VideoSanitizerTests: XCTestCase {
             let buffer = try XCTUnwrap(pixel)
             CVPixelBufferLockBaseAddress(buffer, [])
             if let base = CVPixelBufferGetBaseAddress(buffer) {
-                memset(base, Int32(index * 8), CVPixelBufferGetBytesPerRow(buffer) * 48)
+                let values = base.assumingMemoryBound(to: UInt8.self), stride = CVPixelBufferGetBytesPerRow(buffer)
+                for y in 0..<48 { for x in 0..<64 {
+                    let value = UInt8((x / 2 + y / 2).isMultiple(of: 2) ? 20 + index * 2 : 220 - index * 2)
+                    let offset = y * stride + x * 4
+                    values[offset] = value; values[offset + 1] = value; values[offset + 2] = value; values[offset + 3] = 255
+                } }
             }
             CVPixelBufferUnlockBaseAddress(buffer, [])
             XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 30)))

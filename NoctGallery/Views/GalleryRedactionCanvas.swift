@@ -17,7 +17,7 @@ struct GalleryRedactionCanvas: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Picker("Cover tool", selection: $mode) {
+            Picker("Blur tool", selection: $mode) {
                 Text("Draw").tag("draw"); Text("Move / resize").tag("move"); Text("Pan").tag("pan")
             }.pickerStyle(.segmented)
             GeometryReader { viewport in
@@ -32,12 +32,12 @@ struct GalleryRedactionCanvas: View {
             HStack(spacing: 16) {
                 Button("Undo", systemImage: "arrow.uturn.backward") { undo() }.labelStyle(.iconOnly).disabled(past.isEmpty)
                 Button("Redo", systemImage: "arrow.uturn.forward") { redo() }.labelStyle(.iconOnly).disabled(future.isEmpty)
-                Button("Remove Selected Cover", systemImage: "trash") { masks.removeAll { $0.id == selectedID }; selectedID = nil }
+                Button("Remove Selected Blur", systemImage: "trash") { masks.removeAll { $0.id == selectedID }; selectedID = nil }
                     .labelStyle(.iconOnly).disabled(selectedID == nil)
                 Text("Zoom").font(.caption)
-                Slider(value: $zoom, in: 1...3, step: 0.25).accessibilityLabel("Cover editor zoom")
+                Slider(value: $zoom, in: 1...3, step: 0.25).accessibilityLabel("Blur editor zoom")
             }
-            Text("Draw a cover, or select Move / resize to adjust it. Pan moves around the zoomed image.")
+            Text("Draw an area to blur, or select Move / resize to adjust it. Pan moves around the zoomed image.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 8)
@@ -76,7 +76,8 @@ struct GalleryRedactionCanvas: View {
             ForEach(masks) { mask in
                 let selected = mask.id == selectedID
                 let rect = selected && mode == "move" ? (pending ?? mask.rect(at: time)) : mask.rect(at: time)
-                Rectangle().fill(.black).overlay { if selected { Rectangle().stroke(.white, lineWidth: 2) } }
+                GalleryBlurRegion(image: image, rect: rect, canvasSize: size)
+                    .overlay { if selected { Rectangle().stroke(.white, lineWidth: 2) } }
                     .frame(width: rect.width * size.width, height: rect.height * size.height)
                     .position(x: rect.midX * size.width, y: rect.midY * size.height)
                     .onTapGesture { selectedID = mask.id; mode = "move" }
@@ -88,7 +89,7 @@ struct GalleryRedactionCanvas: View {
                             pending = CGRect(x: min(1 - start.width, max(0, start.minX + value.translation.width / size.width)),
                                 y: min(1 - start.height, max(0, start.minY + value.translation.height / size.height)), width: start.width, height: start.height)
                         }.onEnded { _ in commitPending() })
-                    .accessibilityElement().accessibilityLabel(selected ? "Selected cover" : "Select cover")
+                    .accessibilityElement().accessibilityLabel(selected ? "Selected blur" : "Select blur")
                     .accessibilityAddTraits(.isButton).accessibilityAction { selectedID = mask.id; mode = "move" }
                 if selected && mode == "move" {
                     Circle().fill(.white).overlay { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.caption2).foregroundStyle(.black) }
@@ -101,7 +102,7 @@ struct GalleryRedactionCanvas: View {
                                     width: min(1 - start.minX, max(0.01, start.width + value.translation.width / size.width)),
                                     height: min(1 - start.minY, max(0.01, start.height + value.translation.height / size.height)))
                             }.onEnded { _ in commitPending() })
-                        .accessibilityLabel("Resize selected cover")
+                        .accessibilityLabel("Resize selected blur")
                 }
             }
             if mode == "draw", let pending {
@@ -129,5 +130,37 @@ struct GalleryRedactionCanvas: View {
         let endX = min(1, max(0, value.location.x / size.width)), endY = min(1, max(0, value.location.y / size.height))
         let rect = CGRect(x: min(x, endX), y: min(y, endY), width: abs(endX - x), height: abs(endY - y))
         return rect.width > 0.005 && rect.height > 0.005 ? rect : nil
+    }
+}
+
+private struct GalleryBlurRegion: View {
+    let image: UIImage
+    let rect: CGRect
+    let canvasSize: CGSize
+    @State private var blurred: UIImage?
+    private struct Input: Equatable { let image: ObjectIdentifier; let rect: CGRect }
+
+    var body: some View {
+        ZStack {
+            // Keep the area blurred while the matching export-quality preview renders.
+            Image(uiImage: image).resizable().frame(width: canvasSize.width, height: canvasSize.height)
+                .offset(x: -rect.minX * canvasSize.width, y: -rect.minY * canvasSize.height)
+                .frame(width: rect.width * canvasSize.width, height: rect.height * canvasSize.height, alignment: .topLeading)
+                .clipped().blur(radius: 24, opaque: true)
+            if let blurred { Image(uiImage: blurred).resizable() }
+        }
+        .clipped().contentShape(Rectangle())
+        .task(id: Input(image: ObjectIdentifier(image), rect: rect)) {
+            blurred = nil
+            guard let source = image.cgImage, GalleryRedaction(rect: rect).isValid else { return }
+            let pixels = GalleryRedaction(rect: rect).pixelRect(width: source.width, height: source.height)
+            let worker = Task.detached(priority: .userInitiated) { try GalleryBlur.region(in: source, pixels: pixels) }
+            do {
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled else { return }
+                blurred = UIImage(cgImage: result)
+            } catch { }
+        }
+        .onDisappear { blurred = nil }
     }
 }

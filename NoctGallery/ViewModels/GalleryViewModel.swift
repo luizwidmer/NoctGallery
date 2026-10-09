@@ -22,12 +22,22 @@ struct PreparedGalleryMedia: Sendable {
 @MainActor
 final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
     @Published private(set) var assets: [PhotoAssetRecord] = []
-    @Published private(set) var privateAssets: [PhotoAssetRecord] = []
-    @Published private(set) var organization = GalleryOrganization()
+    @Published private(set) var privateAssets: [PhotoAssetRecord] = [] { didSet { scheduleVisualIndex() } }
+    @Published private(set) var organization = GalleryOrganization() {
+        didSet { queryVocabulary = queryInterpreterAvailability.isAvailable ? organization.visualSearchVocabulary : [] }
+    }
+    private(set) var queryVocabulary: [String] = []
     @Published private(set) var storageItems: [String: GalleryStorageItem] = [:]
     @Published private(set) var scratchBytes: Int64 = 0
     @Published private(set) var exportBytes: Int64 = 0
-    @Published private(set) var isAnalyzing = false
+    @Published private(set) var isAnalyzing = false { didSet { if !isAnalyzing { scheduleVisualIndex() } } }
+    @Published private(set) var isTagging = false
+    @Published private(set) var visualTaggingPaused = false
+    @Published private(set) var isUpdatingVisualSearch = false
+    @Published private(set) var interpretedSearch: GalleryInterpretedSearch?
+    @Published private(set) var interpretingSearchQuery: String?
+    @Published private(set) var searchInterpretationMessage: String?
+    @Published private(set) var queryInterpreterAvailability: GalleryQueryInterpreterAvailability
     @Published private(set) var analysisProgress: String?
     @Published private(set) var duplicateGroups: [GalleryDuplicateGroup] = []
     @Published private(set) var sharingPresets: [GallerySharingPreset] = []
@@ -35,20 +45,25 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published private(set) var inboxUnavailable: String?
     private var analysisTask: Task<Void, Never>?
     private var recognitionTask: Task<String, Error>?
+    private var visualTagTask: Task<[GalleryVisualTag], Error>?
+    private var searchInterpretationTask: Task<GallerySearchQueryPlan, Error>?
+    private var searchInterpretationOperation = UUID()
     private var similarityTask: Task<[GalleryDuplicateGroup], Error>?
     private var trackingTask: Task<[GalleryCoverKeyframe], Error>?
+    private var detectionTask: Task<[GalleryRedaction], Error>?
+    private var detectionOperation = UUID()
     private var inboxPreparation: Task<Int, Error>?
     @Published private(set) var privateUnlocked = false
     @Published private(set) var isUnlocking = false
     @Published private(set) var privateGeneration = UUID()
     @Published private(set) var authorizationStatus: PHAuthorizationStatus
     @Published private(set) var isLoading = false
-    @Published private(set) var exportingAssetID: String?
+    @Published private(set) var exportingAssetID: String? { didSet { if exportingAssetID == nil { scheduleVisualIndex() } } }
     @Published private(set) var processingMessage: String?
     @Published private(set) var hasTemporaryShareFiles = false
     @Published var sharePayload: SharePayload?
     @Published var shareRequest: GalleryShareRequest?
-    @Published private(set) var isOrganizing = false
+    @Published private(set) var isOrganizing = false { didSet { if !isOrganizing { scheduleVisualIndex() } } }
     @Published var errorMessage: String?
     @Published private(set) var isResetting = false
     @Published private(set) var resetNeedsRetry = false
@@ -82,6 +97,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private let preferencesDomain: String?
     private let incomingInbox: GalleryImportInbox?
     private let incomingKeys: any GalleryInboxKeys
+    private let queryInterpreter: any GallerySearchQueryInterpreting
     private var started = false
     private var observesLibraryChanges = false
     private var shareExportLifecycle = ShareExportLifecycle()
@@ -94,7 +110,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
          workStore: MediaWorkStore = MediaWorkStore(), defaults: UserDefaults = .standard,
          lock: GalleryLockController = GalleryLockController(), preferencesDomain: String? = Bundle.main.bundleIdentifier,
          settingsStore providedSettingsStore: GallerySettingsStore? = nil,
-         inbox: GalleryImportInbox? = nil, inboxKeys: any GalleryInboxKeys = GalleryInboxKeyStore()) {
+         inbox: GalleryImportInbox? = nil, inboxKeys: any GalleryInboxKeys = GalleryInboxKeyStore(),
+         queryInterpreter: any GallerySearchQueryInterpreting = GalleryAIQueryInterpreter()) {
         let store = providedSettingsStore ?? GallerySettingsStore(defaults: defaults)
         let loaded: GallerySettingsRecord
         let loadError: String?
@@ -103,6 +120,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         self.preferencesDomain = preferencesDomain
         self.incomingInbox = inbox
         self.incomingKeys = inboxKeys
+        self.queryInterpreter = queryInterpreter
+        self.queryInterpreterAvailability = queryInterpreter.availability
         self.lock = lock
         self.library = library
         self.exportStore = exportStore
@@ -216,6 +235,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func start() async {
         guard !started, !isResetting else { return }
+        await refreshSmartFeatureAvailability()
         await lock.load()
         if let plan = lock.pendingDuress { await applyDuress(plan); return }
         guard settingsLoadError == nil else { return }
@@ -261,6 +281,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @discardableResult
     func unlockPrivate() async -> Bool {
         await lockCleanup?.value
+        await refreshSmartFeatureAvailability()
         guard lock.isUnlocked, !isResetting, !isUnlocking else { return false }
         if privateUnlocked { return true }
         isUnlocking = true
@@ -274,6 +295,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             self.organization = organization
             privateUnlocked = true
             privateGeneration = UUID()
+            scheduleVisualIndex()
             await refreshStorage()
             if canReadLibrary { reload() }
             return true
@@ -292,11 +314,20 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         privateUnlocked = false
         privateAssets = []
         organization = .init()
+        errorMessage = nil
         storageItems = [:]; scratchBytes = 0; exportBytes = 0; duplicateGroups = []
         let activeAnalysis = analysisTask, activeRecognition = recognitionTask, activeSimilarity = similarityTask
         let activeTracking = trackingTask
+        let activeVisualTags = visualTagTask
+        let activeDetection = detectionTask
+        let activeQuery = searchInterpretationTask
+        clearSearchInterpretation()
         activeAnalysis?.cancel(); activeRecognition?.cancel(); activeSimilarity?.cancel(); activeTracking?.cancel()
-        isAnalyzing = false; analysisProgress = nil
+        activeVisualTags?.cancel()
+        activeDetection?.cancel()
+        isAnalyzing = false; isTagging = false; analysisProgress = nil
+        isUpdatingVisualSearch = false
+        isOrganizing = false
         assets = []
         let activeConversion = conversion
         activeConversion?.cancel()
@@ -313,7 +344,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             _ = try? await activeRecognition?.value
             _ = try? await activeSimilarity?.value
             _ = try? await activeTracking?.value
+            _ = try? await activeVisualTags?.value
+            _ = try? await activeDetection?.value
+            _ = try? await activeQuery?.value
             analysisTask = nil; recognitionTask = nil; similarityTask = nil; trackingTask = nil
+            visualTagTask = nil
+            detectionTask = nil
+            searchInterpretationTask = nil
             do {
                 try await workStore.reset()
                 try await exportStore.reset()
@@ -1020,6 +1057,218 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 
+    func suggestSensitiveAreas(in image: CGImage, options: GalleryDetectionOptions) async throws -> [GalleryRedaction] {
+        guard lock.isUnlocked, !isResetting else { throw CancellationError() }
+        let generation = operationGeneration
+        let previous = detectionTask
+        previous?.cancel(); _ = try? await previous?.value
+        try Task.checkCancellation()
+        guard generation == operationGeneration, lock.isUnlocked else { throw CancellationError() }
+        let id = UUID(); detectionOperation = id
+        let worker = Task.detached(priority: .userInitiated) { try GalleryRedactionSuggestions.detect(in: image, options: options) }
+        detectionTask = worker
+        defer { if detectionOperation == id { detectionTask = nil } }
+        let areas = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+        try Task.checkCancellation()
+        guard generation == operationGeneration, lock.isUnlocked else { throw CancellationError() }
+        return areas
+    }
+
+    var untaggedPhotoCount: Int {
+        privateAssets.filter { $0.kind == .photo && organization.items[$0.id]?.visualTags == nil }.count
+    }
+
+    func setVisualSearch(_ enabled: Bool) async {
+        guard privateUnlocked, lock.isUnlocked, !isOrganizing, !isResetting, !isUpdatingVisualSearch else { return }
+        guard !enabled || smartFeaturesAvailable else { return }
+        let generation = operationGeneration
+        isUpdatingVisualSearch = true
+        errorMessage = nil
+        defer { if generation == operationGeneration { isUpdatingVisualSearch = false } }
+        if !enabled {
+            clearSearchInterpretation()
+            _ = try? await searchInterpretationTask?.value
+            visualTaggingPaused = true
+            if isTagging { analysisTask?.cancel(); visualTagTask?.cancel(); _ = await analysisTask?.value }
+        }
+        do {
+            guard generation == operationGeneration, privateUnlocked, !enabled || smartFeaturesAvailable else { return }
+            let session = try await privateStore.currentSession()
+            let value = try await privateStore.setVisualSearch(enabled: enabled, session: session)
+            guard generation == operationGeneration else { return }
+            organization = value
+            visualTaggingPaused = !enabled
+            if enabled { scheduleVisualIndex() }
+        } catch { if generation == operationGeneration { errorMessage = error.localizedDescription } }
+    }
+
+    func editSearchAliases(_ edit: GallerySearchAliasEdit) async -> Bool {
+        guard privateUnlocked, lock.isUnlocked, !isOrganizing, !isResetting, !isUpdatingVisualSearch else { return false }
+        let generation = operationGeneration
+        isOrganizing = true; errorMessage = nil
+        defer { if generation == operationGeneration { isOrganizing = false } }
+        do {
+            let session = try await privateStore.currentSession()
+            guard generation == operationGeneration, privateUnlocked else { return false }
+            let value = try await privateStore.editSearchAliases(edit, session: session)
+            guard generation == operationGeneration, privateUnlocked else { return false }
+            organization = value
+            return true
+        } catch {
+            if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription }
+            return false
+        }
+    }
+
+    func setAIQueryInterpretation(_ enabled: Bool) async {
+        guard privateUnlocked, lock.isUnlocked, !isOrganizing, !isResetting, !isUpdatingVisualSearch else { return }
+        guard !enabled || (smartFeaturesAvailable && organization.visualSearchEnabled == true) else { return }
+        let generation = operationGeneration
+        isOrganizing = true; errorMessage = nil
+        defer { if generation == operationGeneration { isOrganizing = false } }
+        if !enabled { clearSearchInterpretation(); _ = try? await searchInterpretationTask?.value }
+        do {
+            let session = try await privateStore.currentSession()
+            guard generation == operationGeneration, privateUnlocked,
+                  !enabled || (smartFeaturesAvailable && organization.visualSearchEnabled == true) else { return }
+            let value = try await privateStore.setAIQueryInterpretation(enabled: enabled, session: session)
+            if generation == operationGeneration, privateUnlocked { organization = value }
+        } catch { if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription } }
+    }
+
+    var showsSmartSearch: Bool { queryInterpreterAvailability.isSupported }
+    var smartFeaturesAvailable: Bool { queryInterpreterAvailability.isAvailable && queryInterpreter.availability.isAvailable }
+
+    /// Recheck after returning from system Settings. Saved opt-ins never bypass
+    /// current device eligibility or Apple Intelligence activation.
+    func refreshSmartFeatureAvailability() async {
+        queryInterpreterAvailability = queryInterpreter.availability
+        queryVocabulary = smartFeaturesAvailable ? organization.visualSearchVocabulary : []
+        guard !smartFeaturesAvailable else { scheduleVisualIndex(); return }
+        let query = searchInterpretationTask
+        clearSearchInterpretation()
+        let tagging = isTagging ? analysisTask : nil
+        if isTagging { cancelAnalysis() }
+        _ = try? await query?.value
+        _ = await tagging?.value
+    }
+
+    func clearSearchInterpretation() {
+        searchInterpretationOperation = UUID()
+        searchInterpretationTask?.cancel()
+        interpretedSearch = nil; interpretingSearchQuery = nil; searchInterpretationMessage = nil
+    }
+
+    func interpretSearchQuery(_ text: String) async {
+        let generation = operationGeneration, operation = UUID()
+        searchInterpretationOperation = operation
+        let previous = searchInterpretationTask
+        previous?.cancel()
+        interpretedSearch = nil; interpretingSearchQuery = nil; searchInterpretationMessage = nil
+        _ = try? await previous?.value
+        let query = String(text.prefix(512))
+        guard operation == searchInterpretationOperation, generation == operationGeneration, privateUnlocked, lock.isUnlocked,
+              !isResetting, organization.visualSearchEnabled == true, organization.aiQueryInterpretationEnabled == true,
+              !GalleryVisualSearch.queryWords(query).isEmpty else { return }
+        searchInterpretationTask = nil
+        if let phrases = try? GalleryQueryPhrases(query), phrases.required.count == 1, phrases.required[0].count == 1,
+           phrases.excluded.isEmpty {
+            let matcher = organization.searchMatcher
+            // A successful ordinary search already honors user wording and
+            // metadata context. Do not broaden it or override custom synonyms.
+            if privateAssets.contains(where: { organization.matches(query, id: $0.id, using: matcher) }) { return }
+            if let first = GalleryVisualSearch.queryWords(query).first,
+               matcher.matches(first, text: "", tags: organization.visualSearchVocabulary.map { .init(label: $0, confidence: 1) }) {
+                // An explicit tag followed by context keeps keyword AND semantics
+                // even when that context has no match (e.g. headphones vacation).
+                return
+            }
+        }
+        let availability = queryInterpreter.availability
+        guard availability.isAvailable else { searchInterpretationMessage = availability.message; return }
+        defer {
+            if operation == searchInterpretationOperation { searchInterpretationTask = nil; interpretingSearchQuery = nil }
+        }
+        do {
+            // Keep literal results immediate; avoid inference for every keystroke.
+            try await Task.sleep(for: .milliseconds(650))
+            guard operation == searchInterpretationOperation, generation == operationGeneration, privateUnlocked,
+                  organization.visualSearchEnabled == true, organization.aiQueryInterpretationEnabled == true,
+                  smartFeaturesAvailable else { return }
+            try Task.checkCancellation()
+            interpretingSearchQuery = query
+            let interpreter = queryInterpreter, labels = queryVocabulary
+            let worker = Task.detached(priority: .userInitiated) { try await interpreter.interpret(query, labels: labels) }
+            searchInterpretationTask = worker
+            let plan = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+            try Task.checkCancellation()
+            guard operation == searchInterpretationOperation, generation == operationGeneration, privateUnlocked, lock.isUnlocked,
+                  organization.visualSearchEnabled == true, organization.aiQueryInterpretationEnabled == true,
+                  smartFeaturesAvailable else { return }
+            interpretedSearch = .init(query: query, plan: try plan.validated())
+        } catch {
+            guard operation == searchInterpretationOperation, generation == operationGeneration, !(error is CancellationError) else { return }
+            searchInterpretationMessage = (error as? GalleryQueryInterpretationError) == .unsupportedLanguage
+                ? "AI doesn't support this search language. Using your words and synonyms."
+                : "AI couldn't interpret this query. Using your words and synonyms."
+        }
+    }
+
+    private func scheduleVisualIndex() {
+        guard privateUnlocked, lock.isUnlocked, organization.visualSearchEnabled == true, smartFeaturesAvailable, !visualTaggingPaused else { return }
+        let generation = operationGeneration
+        Task {
+            await Task.yield()
+            guard generation == operationGeneration, !isAnalyzing, !isProcessing, !isOrganizing, !isResetting,
+                  untaggedPhotoCount > 0, !visualTaggingPaused else { return }
+            indexVisualTags()
+        }
+    }
+
+    func indexVisualTags(ids: Set<String>? = nil, refresh: Bool = false) {
+        guard privateUnlocked, lock.isUnlocked, organization.visualSearchEnabled == true, smartFeaturesAvailable, !isAnalyzing, !isResetting,
+              !isOrganizing, !isProcessing, !isUpdatingVisualSearch else { return }
+        let generation = operationGeneration
+        let candidates = Array(privateAssets.filter {
+            $0.kind == .photo && (ids?.contains($0.id) ?? true) && (refresh || organization.items[$0.id]?.visualTags == nil)
+        }.prefix(500))
+        guard !candidates.isEmpty else { return }
+        visualTaggingPaused = false; isTagging = true; isAnalyzing = true; errorMessage = nil
+        analysisTask = Task {
+            defer {
+                if generation == operationGeneration {
+                    isTagging = false; isAnalyzing = false; analysisProgress = nil; visualTagTask = nil
+                }
+            }
+            do {
+                let session = try await privateStore.currentSession()
+                for (index, item) in candidates.enumerated() {
+                    try Task.checkCancellation()
+                    guard generation == operationGeneration, lock.isUnlocked, smartFeaturesAvailable, organization.visualSearchEnabled == true else { throw CancellationError() }
+                    analysisProgress = "Tagging photo \(index + 1) of \(candidates.count)…"
+                    let recipe = organization.items[item.id]?.photoEdits
+                    let previousTags = organization.items[item.id]?.visualTags
+                    let image = try await shareEditorImage(for: item, photoEdits: recipe)
+                    guard let cgImage = image.cgImage else { throw ImageSanitizer.SanitizationError.decodeFailed }
+                    let worker = Task.detached(priority: .utility) { try GalleryLocalAnalysis.visualTags(in: cgImage) }
+                    visualTagTask = worker
+                    let tags = try await worker.value
+                    try Task.checkCancellation()
+                    guard generation == operationGeneration, lock.isUnlocked, smartFeaturesAvailable, organization.visualSearchEnabled == true else { throw CancellationError() }
+                    guard privateAssets.contains(where: { $0.id == item.id }), organization.items[item.id]?.photoEdits == recipe,
+                          organization.items[item.id]?.visualTags == previousTags else { continue }
+                    let value = try await privateStore.setVisualTags(id: item.id, tags: tags, photoEdits: recipe, replacing: previousTags, session: session)
+                    if generation == operationGeneration { organization = value }
+                }
+            } catch {
+                if generation == operationGeneration {
+                    visualTaggingPaused = true
+                    if !(error is CancellationError) { errorMessage = error.localizedDescription }
+                }
+            }
+        }
+    }
+
     func findDuplicates(ids: Set<String>? = nil) {
         guard privateUnlocked, !isAnalyzing else { return }
         let generation = operationGeneration
@@ -1055,7 +1304,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 
-    func cancelAnalysis() { analysisTask?.cancel(); recognitionTask?.cancel(); similarityTask?.cancel() }
+    func cancelAnalysis() {
+        if isTagging { visualTaggingPaused = true }
+        analysisTask?.cancel(); recognitionTask?.cancel(); similarityTask?.cancel(); visualTagTask?.cancel()
+    }
 
     private func boundedPhotoData(_ url: URL) throws -> Data {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0

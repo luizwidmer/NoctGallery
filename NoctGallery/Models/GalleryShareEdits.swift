@@ -2,14 +2,18 @@ import CoreGraphics
 import CoreVideo
 import Foundation
 
+enum GalleryDetectionKind: String, Sendable { case face, text, code }
+
 /// Coordinates are normalized to the upright displayed image, with a top-left origin.
 struct GalleryRedaction: Equatable, Identifiable, Sendable {
     let id: UUID
     var rect: CGRect
     var referenceTime: Double
     var keyframes: [GalleryCoverKeyframe]
-    init(id: UUID = UUID(), rect: CGRect, referenceTime: Double = 0, keyframes: [GalleryCoverKeyframe] = []) {
+    var detectionKind: GalleryDetectionKind?
+    init(id: UUID = UUID(), rect: CGRect, referenceTime: Double = 0, keyframes: [GalleryCoverKeyframe] = [], detectionKind: GalleryDetectionKind? = nil) {
         self.id = id; self.rect = rect; self.referenceTime = referenceTime; self.keyframes = keyframes
+        self.detectionKind = detectionKind
     }
 
     var isValid: Bool {
@@ -80,20 +84,23 @@ struct GalleryShareEdits: Equatable, Sendable {
         return self
     }
 
-    func redact(_ image: CGImage) throws -> CGImage {
+    func redact(_ image: CGImage, at time: Double = 0) throws -> CGImage {
         guard !redactions.isEmpty else { return image }
         _ = try validated()
-        guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
-            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        guard time.isFinite else { throw ImageSanitizer.SanitizationError.invalidConfiguration }
+        guard image.width <= 8_192, image.height <= 8_192,
+            let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else {
             throw ImageSanitizer.SanitizationError.colorNormalizationFailed
         }
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         context.setShouldAntialias(false)
-        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.setBlendMode(.copy)
         for mask in redactions {
-            let rect = mask.pixelRect(width: image.width, height: image.height)
-            context.fill(CGRect(x: rect.minX, y: Double(image.height) - rect.maxY, width: rect.width, height: rect.height))
+            let rect = mask.pixelRect(width: image.width, height: image.height, time: time)
+            let blurred = try GalleryBlur.region(in: image, pixels: rect)
+            context.draw(blurred, in: CGRect(x: rect.minX, y: Double(image.height) - rect.maxY, width: rect.width, height: rect.height))
         }
         guard let result = context.makeImage() else { throw ImageSanitizer.SanitizationError.colorNormalizationFailed }
         return result
@@ -102,6 +109,7 @@ struct GalleryShareEdits: Equatable, Sendable {
     func redact(_ buffer: CVPixelBuffer, at time: Double = 0) throws {
         guard !redactions.isEmpty else { return }
         _ = try validated()
+        guard time.isFinite else { throw ImageSanitizer.SanitizationError.invalidConfiguration }
         guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA,
               CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess else { throw VideoSanitizer.VideoError.conversionFailed }
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
@@ -109,12 +117,27 @@ struct GalleryShareEdits: Equatable, Sendable {
         let stride = CVPixelBufferGetBytesPerRow(buffer)
         guard width > 0, width <= 8_192, height > 0, height <= 8_192, stride >= width * 4,
               let base = CVPixelBufferGetBaseAddress(buffer) else { throw VideoSanitizer.VideoError.conversionFailed }
+        let snapshot = Data(bytes: base, count: stride * height)
+        guard let provider = CGDataProvider(data: snapshot as CFData),
+              let source = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: stride, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
+            throw VideoSanitizer.VideoError.conversionFailed
+        }
+        let output = try redact(source, at: time)
+        guard let data = output.dataProvider?.data, let rgba = CFDataGetBytePtr(data) else {
+            throw VideoSanitizer.VideoError.conversionFailed
+        }
+        // Copy only selected pixels, preserving all other pixels and row padding.
         for mask in redactions {
             let rect = mask.pixelRect(width: width, height: height, time: time)
             for y in Int(rect.minY)..<Int(rect.maxY) {
                 let row = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
                 for x in Int(rect.minX)..<Int(rect.maxX) {
-                    row[x * 4] = 0; row[x * 4 + 1] = 0; row[x * 4 + 2] = 0; row[x * 4 + 3] = 255
+                    let offset = y * output.bytesPerRow + x * 4
+                    row[x * 4] = rgba[offset + 2]; row[x * 4 + 1] = rgba[offset + 1]
+                    row[x * 4 + 2] = rgba[offset]; row[x * 4 + 3] = rgba[offset + 3]
                 }
             }
         }

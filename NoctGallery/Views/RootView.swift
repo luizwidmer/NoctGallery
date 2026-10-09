@@ -55,7 +55,10 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { lock.lock(); Task { await model.lockPrivate(lockApp: false) } }
-            if phase == .active { lock.activate(); Task { await model.refreshInbox() } }
+            if phase == .active {
+                lock.activate()
+                Task { await model.refreshSmartFeatureAvailability(); await model.refreshInbox() }
+            }
         }
         .sheet(isPresented: $lock.showsProtectionSettings) {
             NavigationStack { GalleryProtectionView() }

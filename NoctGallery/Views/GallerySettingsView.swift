@@ -70,6 +70,15 @@ struct GallerySettingsView: View {
 
                 Section("Privacy & storage") {
                     NavigationLink("Storage", destination: GalleryStorageView())
+                    if model.showsSmartSearch {
+                        NavigationLink("Smart Search", destination: GallerySmartSearchView())
+                            .disabled(!model.smartFeaturesAvailable)
+                            .foregroundStyle(model.smartFeaturesAvailable ? Color.primary : Color.secondary)
+                            .accessibilityIdentifier("settings.smart-search")
+                        if !model.smartFeaturesAvailable {
+                            Text(model.queryInterpreterAvailability.message).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
                     NavigationLink("Private Text Search", destination: GalleryTextSearchView())
                     NavigationLink("Find Duplicates", destination: GalleryDuplicatesView())
                     NavigationLink("Incoming Shares", destination: GalleryInboxView())

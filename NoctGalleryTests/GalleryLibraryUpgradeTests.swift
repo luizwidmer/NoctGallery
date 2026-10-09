@@ -54,6 +54,10 @@ final class GalleryLibraryUpgradeTests: XCTestCase {
         _ = try await store.organize(ids: [asset.id], edit: .photoEdits(.init(quarterTurns: 1)), session: session)
         _ = try await store.setTextSearch(enabled: true, session: session)
         _ = try await store.setRecognizedText(id: asset.id, text: "private transcript", session: session)
+        _ = try await store.setVisualSearch(enabled: true, session: session)
+        _ = try await store.setVisualTags(id: asset.id, tags: [.init(label: "headphones", confidence: 0.9)], photoEdits: .init(quarterTurns: 1), session: session)
+        _ = try await store.editSearchAliases(.save(.init(terms: ["sunglasses", "private shades"])), session: session)
+        _ = try await store.setAIQueryInterpretation(enabled: false, session: session)
         let before = try await store.contentDigest(id: asset.id, session: session)
         try await store.applyDuress(.init(id: UUID(), action: .retainDecoys, retainedIDs: [asset.id],
             replacementPIN: .init(salt: Data(repeating: 1, count: 32), digest: Data(repeating: 2, count: 32)),
@@ -62,6 +66,9 @@ final class GalleryLibraryUpgradeTests: XCTestCase {
         let organization = try await store.organization()
         XCTAssertTrue(organization.items.isEmpty)
         XCTAssertNil(organization.textSearchEnabled)
+        XCTAssertNil(organization.visualSearchEnabled)
+        XCTAssertNil(organization.searchAliasGroups)
+        XCTAssertNil(organization.aiQueryInterpretationEnabled)
         let after = try await store.contentDigest(id: asset.id, session: store.currentSession())
         XCTAssertEqual(before, after)
     }
@@ -75,7 +82,7 @@ final class GalleryLibraryUpgradeTests: XCTestCase {
             redactions: [.init(rect: CGRect(x: 0, y: 0, width: 1, height: 0.2))], photoEdits: recipe))
         XCTAssertEqual(output.pixelWidth, 50); XCTAssertEqual(output.pixelHeight, 200)
         let decoded = try XCTUnwrap(UIImage(data: output.data)?.cgImage)
-        XCTAssertLessThan(try pixel(decoded, x: 10, y: 10), 5)
+        XCTAssertGreaterThan(try pixel(decoded, x: 10, y: 10), 245, "Blur preserves the color of a uniform selected region")
         XCTAssertGreaterThan(try pixel(decoded, x: 10, y: 150), 245)
         XCTAssertEqual(SHA256.hash(data: original), before)
         XCTAssertThrowsError(try GalleryPhotoEdits(quarterTurns: 4).validated())
@@ -108,10 +115,17 @@ final class GalleryLibraryUpgradeTests: XCTestCase {
         let value = try XCTUnwrap(buffer)
         CVPixelBufferLockBaseAddress(value, [])
         let pointer = try XCTUnwrap(CVPixelBufferGetBaseAddress(value)); let stride = CVPixelBufferGetBytesPerRow(value)
-        memset(pointer, 255, stride * 100); CVPixelBufferUnlockBaseAddress(value, [])
+        memset(pointer, 255, stride * 100)
+        let source = pointer.assumingMemoryBound(to: UInt8.self)
+        for y in 10..<30 { for x in 60..<80 {
+            let color: UInt8 = (x + y).isMultiple(of: 2) ? 0 : 255
+            for channel in 0..<3 { source[y * stride + x * 4 + channel] = color }
+        } }
+        CVPixelBufferUnlockBaseAddress(value, [])
         try GalleryShareEdits(redactions: [cover]).redact(value, at: 2)
         CVPixelBufferLockBaseAddress(value, .readOnly); defer { CVPixelBufferUnlockBaseAddress(value, .readOnly) }
-        XCTAssertEqual(pointer.assumingMemoryBound(to: UInt8.self)[15 * stride + 65 * 4], 0)
+        XCTAssertGreaterThan(pointer.assumingMemoryBound(to: UInt8.self)[15 * stride + 65 * 4], 60)
+        XCTAssertLessThan(pointer.assumingMemoryBound(to: UInt8.self)[15 * stride + 65 * 4], 220)
         XCTAssertEqual(pointer.assumingMemoryBound(to: UInt8.self)[15 * stride + 15 * 4], 255)
     }
 
