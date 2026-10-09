@@ -1,6 +1,16 @@
 # Noct Gallery 0.5.0 — build 13
 
-Local development release. The app, share extension and test configurations use version 0.5.0 (13). This version has not been uploaded to App Store Connect or submitted for review. The earlier 0.4.0 submission is a separate release.
+Submitted October 9, 2026 at 4:39 PM (America/Bahia).
+App: `6810294404`. Bundle: `com.luizwidmer.NoctGallery`.
+
+**App Store Connect status: Waiting for Review.** Submission
+`70cda5b8-c43b-4100-8c68-89a2bb200f25` contains **0.5.0 (13)**.
+Automatic release after approval and immediate availability to all users remain
+selected. Apple approval and public availability of this update are pending.
+
+The app, embedded import extension and test configurations use version 0.5.0
+(13). Source changes were committed and pushed on `main` as `b066ec3` before
+archiving. The earlier 0.4.0 release is a separate version.
 
 ## What's New
 
@@ -18,10 +28,67 @@ Open a photo or video and choose Prepare to Share. Detect Sensitive Areas sugges
 
 ## Privacy and media
 
-[Updated privacy-policy source](PrivacyPolicy-2026-10-09.md) is prepared for publication with this release; the live policy has not been changed. All classification and sensitive-area detection use local Apple frameworks. Search tags stay in the encrypted vault; detection text and code payloads are discarded. No new permissions or collection endpoints are added.
+[Updated privacy-policy source](PrivacyPolicy-2026-10-09.md) was published at
+[the public policy page](https://luizwidmer.com/noct-gallery-privacy-policy/) and
+read back in Safari. It covers opt-in English object/scene tags, editable
+synonyms, on-device phrase interpretation, unavailable-device states, discarded
+detection payloads and Gaussian blur. Search tags stay in the encrypted vault.
+No new permissions or collection endpoints are added. The published App Store
+privacy label remains **Data Not Collected**, and its privacy-policy URL is
+unchanged.
 
 [Fictional validation media and generation prompts](AIValidationMedia.md) describes the headphone, portrait, dog, bicycle, laptop and reused travel/cafe test photos. They belong only to the test bundle and are excluded from the shipping app. [Validation evidence](Validation-2026-10-09-SmartSearch.md) records native classification, context-search checks, detection and actual blur exports.
 
 Smart Albums, backups, device transfer and Noctweave sharing remain outside this release.
 
 [Search language and default-state verification](Validation-2026-10-09-SearchLanguage.md) records the expanded suite, actual AI interpretation and hidden/gray/off states.
+
+## Release preparation and screenshots
+
+The signed archive and embedded import extension were verified with matching
+version/build values and App Group entitlements. Their renewed provisioning
+profiles and both dSYMs are retained. Upload succeeded, App Store Connect
+processed build 13, and the submitted review detail was read back to confirm
+**0.5.0 (13), Waiting for Review**.
+
+The description, promotional text, keywords, What's New and reviewer notes were
+saved and read back before submission. Review notes explain PIN setup, the two
+AI opt-ins, hidden/disabled states, English and Portuguese examples, blur and
+export review, local processing and validation limits. Existing review contact
+information and release settings are preserved.
+
+Nine iPhone screenshots (1320 × 2868) and nine iPad screenshots (2064 × 2752)
+were accepted. They show native app views with fictional generated photography;
+the example media is excluded from the shipping app. The phone lock capture is
+retained from the prior release because its interface is unchanged.
+
+The sequences follow using the gallery before configuring its optional tools:
+
+- iPhone: library → object search → photo editor → blur → export review →
+  captions/notes → optional text search → Smart Search controls → unlock.
+- iPad: library → object search → fullscreen viewing → photo editor → blur →
+  export review → captions/notes → optional text search → Smart Search controls.
+
+The iPhone large-display order also supplies the inherited medium-display
+screenshots. Reordered assets remain in Asset Library. Apple’s optional product
+page header and search-result creative assets were researched but not added.
+They can be reviewed separately through Asset Library.
+
+## Validation and private evidence
+
+The 114-test native iOS-on-Mac suite passed, including actual Vision
+classification and Apple AI inference on diverse objects. Focused iPhone and
+iPad simulator checks passed with the unavailable-model inference check
+explicitly skipped. Physical camera, Face ID and USB security-key execution
+were not verified by this release run. See the linked validation records for
+coverage and limits.
+
+Private release evidence remains in the parent workspace at
+`ReleaseArtifacts/NoctGallery-0.5.0-2026-10-09/`: archive, dSYMs, signing/upload
+logs, source snapshot and hashes, test results, metadata, privacy-policy HTML,
+fictional media, native captures, screenshot compositions and order manifests,
+and Safari accessibility/screenshot confirmation. This directory is outside the
+public repository. `screenshot-manifest-ordered.json` records the final sequence
+and preserved asset hashes; `release-status.json` and
+`evidence/submitted-release-ax.txt` / `evidence/submitted-release.png` record
+the submitted version and build.

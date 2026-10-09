@@ -152,7 +152,7 @@ Decoy metadata is optional synthetic data based on documented equipment. It is n
 | [Library tools verification](Docs/Validation-2026-10-06-LibraryTools.md) | Earlier library feature tests and rendered screens |
 | [Earlier verification record](Docs/Validation-2026-09-17.md) | Earlier tests and physical-device limits |
 | [0.2.0 release notes](Docs/Release-0.2.0.md) | Build evidence and release preparation |
-| [Privacy policy](Docs/PrivacyPolicy-2026-10-06.md) | Published policy for local storage, analysis and sharing |
+| [Privacy policy](Docs/PrivacyPolicy-2026-10-09.md) | Published policy for local storage, optional on-device AI, analysis and sharing |
 
 <a id="contributing-and-security"></a>
 

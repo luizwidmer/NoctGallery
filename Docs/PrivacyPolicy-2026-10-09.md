@@ -1,3 +1,4 @@
+<!-- Published and verified at https://luizwidmer.com/noct-gallery-privacy-policy/ on October 9, 2026 for version 0.5.0 (13). -->
 # Noct Gallery Privacy Policy
 
 Updated October 9, 2026. Covers Noct Gallery 0.2.0 and later. The original library-viewing features in 0.1.0 use the same local processing approach; private storage, camera and unlock features apply when available in your installed version.
