@@ -57,13 +57,13 @@ struct RootView: View {
             if phase == .background { lock.lock(); Task { await model.lockPrivate(lockApp: false) } }
             if phase == .active {
                 lock.activate()
-                Task { await model.refreshSmartFeatureAvailability(); await model.refreshInbox() }
+                Task { await model.refreshSmartFeatureAvailability(); await model.refreshInbox(); await model.refreshRecentlyDeleted() }
             }
         }
         .sheet(isPresented: $lock.showsProtectionSettings) {
             NavigationStack { GalleryProtectionView() }
         }
-        .sheet(item: $model.shareRequest, onDismiss: model.finishShare) { request in
+        .sheet(item: rootShareBinding, onDismiss: model.finishShare) { request in
             GalleryShareFlowView(request: request)
         }
         .alert("Noct Gallery", isPresented: errorBinding) {
@@ -87,12 +87,14 @@ struct RootView: View {
             set: { if !$0 { model.errorMessage = nil } }
         )
     }
+    private var rootShareBinding: Binding<GalleryShareRequest?> {
+        Binding(get: { model.fullscreenPresented ? nil : model.shareRequest }, set: { model.shareRequest = $0 })
+    }
 }
 private struct MainTabView: View {
     @EnvironmentObject private var model: GalleryViewModel
-    @State private var selection = 1
     var body: some View {
-        TabView(selection: $selection) {
+        TabView(selection: $model.selectedTab) {
             Group {
                 if model.canReadLibrary {
                     GalleryView()

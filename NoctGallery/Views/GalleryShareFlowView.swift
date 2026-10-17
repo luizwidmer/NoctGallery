@@ -87,7 +87,8 @@ struct GalleryShareFlowView: View {
             Button("Cancel", role: .cancel) { }
             Button("Save") {
                 model.saveSharingPreset(.init(name: presetName.trimmingCharacters(in: .whitespacesAndNewlines), format: GalleryOutputFormat(rawValue: outputFormat) ?? .heic,
-                    maximumDimension: maximumDimension, quality: quality, videoMaximumEdge: edits.videoMaximumEdge, removeAudio: edits.removeAudio, metadata: profile))
+                    maximumDimension: maximumDimension, quality: quality, videoMaximumEdge: edits.videoMaximumEdge,
+                    videoMaximumFrameRate: edits.videoMaximumFrameRate, removeAudio: edits.removeAudio, metadata: profile))
             }.disabled(!GalleryOrganization.validName(presetName.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
     }
@@ -145,10 +146,8 @@ struct GalleryShareFlowView: View {
                 } header: { Text("Blur sensitive details") }
                 if asset.kind == .video, asset.duration >= 0.1 {
                     Section("Video") {
-                        LabeledContent("Preview frame", value: timeLabel(frameTime))
-                        Slider(value: $frameTime, in: 0...max(0.01, asset.duration - 0.05), onEditingChanged: { editing in
-                            if !editing { frameRevision += 1 }
-                        }).accessibilityLabel("Preview frame")
+                        GalleryVideoTimelineView(asset: asset, time: $frameTime, edits: $edits, selectedID: selectedCover) { frameRevision += 1 }
+                        DisclosureGroup("Precise Trim Times") {
                         LabeledContent("Start", value: timeLabel(edits.trimStart))
                         Slider(value: $edits.trimStart, in: 0...max(0.001, (edits.trimEnd ?? asset.duration) - 0.1))
                             .accessibilityLabel("Trim start")
@@ -156,6 +155,7 @@ struct GalleryShareFlowView: View {
                         Slider(value: Binding(get: { edits.trimEnd ?? asset.duration }, set: { edits.trimEnd = $0 }),
                                in: min(edits.trimStart + 0.1, asset.duration)...asset.duration)
                             .accessibilityLabel("Trim end")
+                        }
                         Toggle("Remove Audio", isOn: $edits.removeAudio)
                         if let index = edits.redactions.firstIndex(where: { $0.id == selectedCover }) {
                             Button("Track Selected Blur Through Clip", systemImage: "viewfinder") { trackSelectedCover() }.disabled(tracking)
@@ -173,6 +173,11 @@ struct GalleryShareFlowView: View {
                                     let rect = edits.redactions[index].rect(at: frameTime)
                                     edits.redactions[index].rect = rect; edits.redactions[index].keyframes = []
                                 }
+                                Button("Remove Keyframe at Preview") {
+                                    let current = edits.redactions[index].rect(at: frameTime)
+                                    edits.redactions[index].keyframes.removeAll { abs($0.time - frameTime) < 0.02 }
+                                    if edits.redactions[index].keyframes.isEmpty { edits.redactions[index].rect = current }
+                                }.disabled(!edits.redactions[index].keyframes.contains { abs($0.time - frameTime) < 0.02 })
                             }
                         }
                         if tracking { ProgressView("Tracking selected area…"); Button("Cancel Tracking") { trackingWork?.cancel() } }
@@ -181,6 +186,11 @@ struct GalleryShareFlowView: View {
                     }
                     if !edits.removeAudio {
                         Section("Silence parts of the audio") {
+                            HStack {
+                                Button("Start at Playhead") { silenceStart = min(frameTime, asset.duration - 0.1); silenceEnd = max(silenceStart + 0.1, silenceEnd) }
+                                Spacer()
+                                Button("End at Playhead") { silenceEnd = max(silenceStart + 0.1, frameTime) }
+                            }.font(.subheadline)
                             LabeledContent("From", value: timeLabel(silenceStart))
                             Slider(value: $silenceStart, in: 0...max(0.001, asset.duration - 0.1)).accessibilityLabel("Silence start")
                             LabeledContent("Through", value: timeLabel(max(silenceStart + 0.1, min(asset.duration, silenceEnd))))
@@ -229,17 +239,29 @@ struct GalleryShareFlowView: View {
                     ForEach(GallerySharingPreset.builtIns + model.sharingPresets) { preset in
                         Button(preset.name) {
                             outputFormat = preset.format.rawValue; maximumDimension = preset.maximumDimension; quality = preset.quality
-                            edits.videoMaximumEdge = preset.videoMaximumEdge; edits.removeAudio = preset.removeAudio; profile = preset.metadata
+                            edits.videoMaximumEdge = preset.videoMaximumEdge; edits.videoMaximumFrameRate = preset.videoMaximumFrameRate ?? 30
+                            edits.removeAudio = preset.removeAudio; profile = preset.metadata
                         }
                     }
                 }
-                Picker("Photo format", selection: $outputFormat) { ForEach(GalleryOutputFormat.allCases) { Text($0.title).tag($0.rawValue) } }
-                Picker("Photo maximum edge", selection: $maximumDimension) { Text("2,048 px").tag(2_048); Text("4,096 px").tag(4_096); Text("8,192 px").tag(8_192) }
-                if outputFormat != GalleryOutputFormat.png.rawValue {
-                    LabeledContent("Photo quality", value: quality.formatted(.percent.precision(.fractionLength(0))))
-                    Slider(value: $quality, in: 0.65...1, step: 0.01).accessibilityLabel("Photo export quality")
+                if request.assets.contains(where: { $0.kind == .photo }) {
+                    Picker("Photo format", selection: $outputFormat) { ForEach(GalleryOutputFormat.allCases) { Text($0.title).tag($0.rawValue) } }
+                    Picker("Photo maximum edge", selection: $maximumDimension) { Text("2,048 px").tag(2_048); Text("4,096 px").tag(4_096); Text("8,192 px").tag(8_192) }
+                    if outputFormat != GalleryOutputFormat.png.rawValue {
+                        LabeledContent("Photo quality", value: quality.formatted(.percent.precision(.fractionLength(0))))
+                        Slider(value: $quality, in: 0.65...1, step: 0.01).accessibilityLabel("Photo export quality")
+                    }
                 }
-                Picker("Video maximum edge", selection: $edits.videoMaximumEdge) { Text("960 px").tag(960); Text("1,280 px").tag(1_280); Text("1,920 px").tag(1_920) }
+                if request.assets.contains(where: { $0.kind == .video }) {
+                    Picker("Video quality", selection: $edits.videoMaximumEdge) { Text("Small · 960 px").tag(960); Text("720p").tag(1_280); Text("1080p").tag(1_920); Text("4K").tag(3_840) }
+                    Picker("Video frame rate", selection: $edits.videoMaximumFrameRate) { Text("Up to 30 fps").tag(30); Text("Up to 60 fps").tag(60) }
+                    Text("Higher quality takes more space and processing time. Resolution and frame rate never exceed the source. Video copies use SDR; HDR is not preserved.").font(.footnote).foregroundStyle(.secondary)
+                    if isSingle, asset.kind == .video, let plan = try? GalleryVideoOutputPlan.make(size: CGSize(width: asset.pixelWidth, height: asset.pixelHeight), sourceFrameRate: Double(edits.videoMaximumFrameRate), edits: edits) {
+                        let estimate = plan.estimatedBytes(duration: max(0, (edits.trimEnd ?? asset.duration) - edits.trimStart))
+                        LabeledContent("Estimated size at selected cap", value: ByteCountFormatter.string(fromByteCount: estimate, countStyle: .file)).font(.footnote)
+                        Text("Actual size varies. Standard batches are limited to 512 MB; higher-quality batches to 1 GB. Trim or choose a smaller preset when needed.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if !isSingle { Toggle("Remove Video Audio", isOn: $edits.removeAudio) }
                 Button("Save Current Sharing Preset") { presetName = ""; namesPreset = true }.disabled(model.sharingPresets.count >= 30)
             }
@@ -281,6 +303,7 @@ struct GalleryShareFlowView: View {
                         if item.kind == .video {
                             LabeledContent("Duration", value: timeLabel(item.inspection.duration))
                             LabeledContent("Audio", value: item.inspection.hasAudio ? "Included" : "None")
+                             if let rate = item.inspection.frameRate { LabeledContent("Frame rate", value: rate.formatted(.number.precision(.fractionLength(0...2))) + " fps") }
                         }
                     }.font(.subheadline)
                     GalleryMetadataComparison(original: item.originalMetadata, exported: item.inspection.fields)

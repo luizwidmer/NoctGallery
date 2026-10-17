@@ -15,7 +15,7 @@ struct GalleryView: View {
     @State private var showsOrganize = false
     @State private var confirmsDelete = false
     @State private var batchBusy = false
-    @State private var sort = GallerySort.newest
+    @State private var sort = GallerySort.relevance
     @State private var formatFilter = GalleryFormatFilter.all
     @State private var tagFilter = ""
     @State private var dateFilter = false
@@ -27,22 +27,33 @@ struct GalleryView: View {
     @State private var showsInbox = false
     @State private var showsDuplicates = false
     @State private var showsSmartSearch = false
+    @State private var showsDeleted = false
+    @State private var viewingAsset: PhotoAssetRecord?
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var columnCount: Int { dynamicTypeSize.isAccessibilitySize ? (sizeClass == .regular ? 2 : 1) : model.gridDensity * (sizeClass == .regular ? 2 : 1) }
 
     init(source: GallerySource = .photos, initialSearchText: String = "") {
         self.source = source
         _searchText = State(initialValue: initialSearchText)
+        _sort = State(initialValue: source == .photos ? .newest : .relevance)
     }
 
     private var selectedAssets: [PhotoAssetRecord] {
         (source == .photos ? model.assets : model.privateAssets).filter { selection.contains($0.id) }
     }
 
+    private var searchScope: GallerySearchScope { GallerySearchScope.parse(searchText) }
+    private var searchHits: [String: GallerySearchHit] {
+        let scope = searchScope
+        return model.searchIndex.search(scope.subject, interpretation: model.interpretedSearch.flatMap { $0.query == scope.subject ? $0.plan : nil })
+    }
     private var filteredAssets: [PhotoAssetRecord] {
         let assets = source == .photos ? model.assets : model.privateAssets
-        let matcher = model.organization.searchMatcher
-        let interpretation = model.interpretedSearch.flatMap { $0.query == String(searchText.prefix(512)) ? $0.plan : nil }
+        let scope = searchScope
+        let hits = source == .privateLibrary ? searchHits : [:]
         let result = assets.filter { asset in
-            formatFilter.matches(asset) &&
+            scope.includes(asset, organization: model.organization) && formatFilter.matches(asset) &&
             (tagFilter.isEmpty || model.organization.items[asset.id]?.tags.contains(tagFilter) == true) &&
             (!dateFilter || (asset.creationDate.map { $0 >= Calendar.current.startOfDay(for: earliestDate) && $0 < (Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: latestDate)) ?? latestDate) } ?? false)) &&
             (minimumDuration == 0 || (asset.kind == .video && asset.duration >= minimumDuration)) &&
@@ -50,15 +61,30 @@ struct GalleryView: View {
             (collection == "all" || (collection == "favorites" && model.organization.items[asset.id]?.favorite == true)
                 || (UUID(uuidString: collection).map { id in model.organization.items[asset.id]?.albumIDs.contains(id) == true } ?? false)) &&
             (source == .privateLibrary
-                ? model.organization.matches(searchText, id: asset.id, extraText: asset.dateLabel + " " + asset.dimensionsLabel + " " + asset.mediaTitle,
-                    using: matcher, interpretation: interpretation)
-                : GalleryVisualSearch.matches(searchText, text: asset.dateLabel + " " + asset.dimensionsLabel + " " + asset.mediaTitle, tags: []))
+                ? hits[asset.id] != nil
+                : GalleryVisualSearch.matches(scope.subject, text: asset.dateLabel + " " + asset.dimensionsLabel + " " + asset.mediaTitle, tags: []))
         }
-        return GalleryLibraryQuery.sorted(result, by: sort, sizes: model.storageItems)
+        let sorted = GalleryLibraryQuery.sorted(result, by: sort, sizes: model.storageItems)
+        if source == .privateLibrary, sort == .relevance, !scope.subject.isEmpty {
+            let order = Dictionary(uniqueKeysWithValues: sorted.enumerated().map { ($0.element.id, $0.offset) })
+            return sorted.sorted { a, b in
+                let x = hits[a.id]?.score ?? 0, y = hits[b.id]?.score ?? 0
+                return x == y ? order[a.id, default: 0] < order[b.id, default: 0] : x > y
+            }
+        }
+        return sorted
     }
 
     var body: some View {
-        NavigationStack {
+        if sizeClass == .regular, source == .privateLibrary {
+            NavigationSplitView { sidebar.navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 300) } detail: { navigationContent }
+                .navigationSplitViewStyle(.balanced)
+        } else { navigationContent }
+    }
+
+    private var navigationContent: some View {
+        let hits = source == .privateLibrary ? searchHits : [:]
+        return NavigationStack {
             VStack(spacing: 0) {
                 Picker("Media", selection: $filter) {
                     Text("All").tag("all")
@@ -67,18 +93,19 @@ struct GalleryView: View {
                 }
                 .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 10)
                 if source == .privateLibrary {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    if sizeClass != .regular { ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             collectionButton("All Items", id: "all", icon: "square.grid.2x2")
                             collectionButton("Favorites", id: "favorites", icon: "heart")
                             ForEach(model.organization.albums) { collectionButton($0.name, id: $0.id.uuidString, icon: "folder") }
                         }.padding(.horizontal, 16).padding(.bottom, 10)
                     }
+                    }
                     if !searchText.isEmpty {
                         VStack(alignment: .leading, spacing: 5) {
-                            if model.interpretingSearchQuery == String(searchText.prefix(512)) {
+                            if model.interpretingSearchQuery == searchScope.subject {
                                 ProgressView("Interpreting search…").font(.footnote)
-                            } else if let interpreted = model.interpretedSearch, interpreted.query == String(searchText.prefix(512)) {
+                            } else if let interpreted = model.interpretedSearch, interpreted.query == searchScope.subject {
                                 Label("AI: \(interpreted.plan.displayTerms)", systemImage: "sparkles").font(.footnote)
                                 Text(interpreted.plan.matchScopeDescription).font(.caption)
                             } else if let message = model.searchInterpretationMessage {
@@ -87,6 +114,25 @@ struct GalleryView: View {
                         }.foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16).padding(.bottom, 8)
                     }
+                }
+                if !searchScope.labels.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack { ForEach(searchScope.labels, id: \.self) { Text($0).font(.caption).padding(8).background(.thinMaterial, in: Capsule()) } }.padding(.horizontal, 16)
+                    }.padding(.bottom, 8)
+                }
+                if model.exportingAssetID == "files" || model.exportingAssetID == "incoming" {
+                    HStack { ProgressView(model.processingMessage ?? "Importing…"); Spacer(); Button("Cancel Import") { model.cancelImport() } }
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                }
+                if !searchText.isEmpty, source == .privateLibrary {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(filteredAssets.count) matches").font(.footnote)
+                        if model.organization.visualSearchEnabled == true {
+                            let photos = model.privateAssets.filter { $0.kind == .photo }
+                            let tagged = photos.filter { model.organization.items[$0.id]?.visualTags != nil }.count
+                            Text("Object search covers \(tagged) of \(photos.count) photos.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
                 }
                 if model.isLoading { Spacer(); ProgressView("Reading library…"); Spacer() }
                 else if filteredAssets.isEmpty {
@@ -99,7 +145,9 @@ struct GalleryView: View {
                              : "Photos and videos you allow access to appear here.")
                     } actions: {
                         if source == .privateLibrary, searchText.isEmpty {
-                            Button("Open Private Camera", systemImage: "camera") { showCamera = true }.buttonStyle(.borderedProminent)
+                            Button("Import from Photos", systemImage: "photo.on.rectangle") { model.selectedTab = 0 }.buttonStyle(.borderedProminent)
+                            Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }.buttonStyle(.bordered)
+                            Button("Open Private Camera", systemImage: "camera") { showCamera = true }.buttonStyle(.bordered)
                         } else if source == .privateLibrary, model.showsSmartSearch {
                             Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }
                                 .buttonStyle(.borderedProminent).disabled(!model.smartFeaturesAvailable)
@@ -112,21 +160,24 @@ struct GalleryView: View {
                             Label("Selected photos and videos", systemImage: "photo.badge.checkmark")
                                 .font(.footnote).foregroundStyle(.secondary).padding(.bottom, 8)
                         }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 220), spacing: 8)], spacing: 8) {
-                            ForEach(filteredAssets) { asset in
-                                Group {
-                                    if selecting {
-                                        Button { toggleSelection(asset.id) } label: { tile(asset) }
-                                    } else {
-                                        NavigationLink(value: asset) { tile(asset) }
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(mediaSections) { section in
+                                if let title = section.title { Text(title).font(.headline).padding(.top, 8) }
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columnCount), spacing: 8) {
+                                    ForEach(section.assets) { asset in
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Button { if selecting { toggleSelection(asset.id) } else { viewingAsset = asset } } label: { tile(asset) }
+                                                .buttonStyle(.plain)
+                                                .accessibilityLabel("\(asset.mediaTitle) from \(asset.dateLabel)")
+                                                .accessibilityAddTraits(selection.contains(asset.id) ? .isSelected : [])
+                                            if !searchText.isEmpty, source == .privateLibrary, let hit = hits[asset.id] {
+                                                Text(hit.reason).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                            }
+                                        }
                                     }
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("\(asset.mediaTitle) from \(asset.dateLabel)")
-                                .accessibilityAddTraits(selection.contains(asset.id) ? .isSelected : [])
                             }
-                        }
-                        .padding(.horizontal, 16).padding(.bottom, 20)
+                        }.padding(.horizontal, 16).padding(.bottom, 20)
                     }
                     .refreshable { if source == .photos { model.reload() } }
                 }
@@ -134,7 +185,7 @@ struct GalleryView: View {
             .navigationTitle(source == .photos ? "Photos" : "Private")
             .searchable(text: $searchText, prompt: source == .privateLibrary ? (model.showsSmartSearch ? "Objects, scenes, tags or text" : "Tags, notes or media details") : "Dates, dimensions or type")
             .autocorrectionDisabled().textInputAutocapitalization(.never)
-            .navigationDestination(for: PhotoAssetRecord.self) { AssetDetailView(asset: $0, sequence: filteredAssets) }
+            .fullScreenCover(item: $viewingAsset) { GalleryFullscreenViewer(items: filteredAssets, selectedID: $0.id) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Sort & Filter", systemImage: "line.3.horizontal.decrease") { showsFilters = true }
@@ -152,7 +203,8 @@ struct GalleryView: View {
                                     .disabled(!model.smartFeaturesAvailable)
                             }
                             Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }
-                            Button("Incoming Shares", systemImage: "tray.and.arrow.down") { showsInbox = true }
+                            Button("Incoming Shares (\(model.incomingCount))", systemImage: "tray.and.arrow.down") { showsInbox = true }
+                            if model.organization.recentlyDeletedEnabled == true { Button("Recently Deleted", systemImage: "trash") { showsDeleted = true } }
                             Button("Find Duplicates", systemImage: "square.on.square") { showsDuplicates = true }
                         } label: { Label("Library Tools", systemImage: "ellipsis.circle") }
                     }
@@ -172,6 +224,8 @@ struct GalleryView: View {
             .sheet(isPresented: $showsOrganize) { GalleryOrganizeView(ids: selection) }
             .sheet(isPresented: $showsFilters) { filterSheet }
             .sheet(isPresented: $showsInbox) { NavigationStack { GalleryInboxView() } }
+            .sheet(item: Binding(get: { source == .privateLibrary && !showsInbox ? model.importReport : nil }, set: { model.importReport = $0 })) { GalleryImportResultsView(report: $0) }
+            .sheet(isPresented: $showsDeleted) { NavigationStack { GalleryRecentlyDeletedView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsDeleted = false } } } } }
             .sheet(isPresented: $showsDuplicates) { NavigationStack { GalleryDuplicatesView(ids: selection.isEmpty ? nil : selection) } }
             .fileImporter(isPresented: $showsImport, allowedContentTypes: [.image, .movie], allowsMultipleSelection: true) { result in
                 switch result {
@@ -180,19 +234,70 @@ struct GalleryView: View {
                 }
             }
             .task(id: model.privateAssets.count) { if source == .privateLibrary { await model.refreshStorage() } }
-            .task(id: queryRequest) { if source == .privateLibrary { await model.interpretSearchQuery(searchText) } }
+            .task(id: queryRequest) { if source == .privateLibrary { await model.interpretSearchQuery(searchScope.subject) } }
             .onDisappear { if source == .privateLibrary { model.clearSearchInterpretation() } }
             .confirmationDialog("Delete \(selection.count) private items?", isPresented: $confirmsDelete) {
-                Button("Delete Permanently", role: .destructive) {
+                Button(model.organization.recentlyDeletedEnabled == true ? "Move to Recently Deleted" : "Delete Permanently", role: .destructive) {
                     batchBusy = true
                     Task { await model.deletePrivateItems(selection); selection = []; batchBusy = false }
                 }
-            } message: { Text("This cannot be undone. Photos originals are not affected.") }
+            } message: { Text(model.organization.recentlyDeletedEnabled == true ? "You can restore these items for seven days. Photos originals are unaffected." : "This cannot be undone. Photos originals are not affected.") }
             .onChange(of: model.organization.albums) { _, albums in
                 if let id = UUID(uuidString: collection), !albums.contains(where: { $0.id == id }) { collection = "all" }
             }
             .fullScreenCover(isPresented: $showCamera) { PrivateCameraView() }
         }
+    }
+
+    private struct MediaSection: Identifiable {
+        let id: String
+        let title: String?
+        var assets: [PhotoAssetRecord]
+    }
+    private var mediaSections: [MediaSection] {
+        let assets = filteredAssets
+        guard model.groupByDate, searchText.isEmpty, sort == .newest || sort == .oldest || sort == .relevance else {
+            return [.init(id: "all", title: nil, assets: assets)]
+        }
+        var result: [MediaSection] = [], positions: [String: Int] = [:]
+        for asset in assets {
+            let components = asset.creationDate.map { Calendar.current.dateComponents([.year, .month], from: $0) }
+            let key = components.map { "\($0.year ?? 0)-\($0.month ?? 0)" } ?? "unknown"
+            if let i = positions[key] { result[i].assets.append(asset) }
+            else {
+                positions[key] = result.count
+                result.append(.init(id: key, title: asset.creationDate?.formatted(.dateTime.month(.wide).year().locale(Locale(identifier: "en"))) ?? "Unknown date", assets: [asset]))
+            }
+        }
+        return result
+    }
+    private var sidebar: some View {
+        List {
+            Section("Library") {
+                sidebarItem("All Items", id: "all", icon: "square.grid.2x2")
+                sidebarItem("Favorites", id: "favorites", icon: "heart")
+            }
+            Section("Albums") {
+                ForEach(model.organization.albums) { sidebarItem($0.name, id: $0.id.uuidString, icon: "folder") }
+                Button("Manage Albums", systemImage: "folder.badge.gearshape") { showsAlbums = true }
+            }
+            Section("Tools") {
+                Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }
+                Button("Incoming Shares", systemImage: "tray.and.arrow.down") { showsInbox = true }.badge(model.incomingCount)
+                Button("Find Duplicates", systemImage: "square.on.square") { showsDuplicates = true }
+                if model.showsSmartSearch {
+                    Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }.disabled(!model.smartFeaturesAvailable)
+                }
+                if model.organization.recentlyDeletedEnabled == true { Button("Recently Deleted", systemImage: "trash") { showsDeleted = true } }
+                Button("View Options", systemImage: "slider.horizontal.3") { showsFilters = true }
+            }
+        }.navigationTitle("Library")
+    }
+    private func sidebarItem(_ title: String, id: String, icon: String) -> some View {
+        Button { collection = id } label: {
+            HStack { Label(title, systemImage: icon); Spacer(); if collection == id { Image(systemName: "checkmark") } }
+        }.foregroundStyle(collection == id ? NoctGalleryTheme.accent : Color.primary)
+            .accessibilityAddTraits(collection == id ? .isSelected : [])
     }
 
     private struct QueryRequest: Equatable {
@@ -201,7 +306,7 @@ struct GalleryView: View {
         let labels: [String]
     }
     private var queryRequest: QueryRequest {
-        .init(text: String(searchText.prefix(512)), generation: model.privateGeneration,
+        .init(text: searchScope.subject, generation: model.privateGeneration,
               enabled: model.organization.visualSearchEnabled == true && model.organization.aiQueryInterpretationEnabled == true,
               available: model.queryInterpreterAvailability.isAvailable,
               groups: model.organization.effectiveSearchAliasGroups, labels: model.queryVocabulary)
@@ -218,9 +323,14 @@ struct GalleryView: View {
     private var filterSheet: some View {
         NavigationStack {
             Form {
+                Section("View") {
+                    Picker("Thumbnail size", selection: $model.gridDensity) { Text("Large").tag(2); Text("Standard").tag(3); Text("Compact").tag(4) }
+                    Toggle("Group by month", isOn: $model.groupByDate)
+                    Text("Date groups appear in chronological views. Best matches keeps relevant search results together.").font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("Sort") {
                     Picker("Order", selection: $sort) {
-                        ForEach(GallerySort.allCases.filter { source == .privateLibrary || ($0 != .largest && $0 != .recentlyImported) }) { Text($0.title).tag($0) }
+                        ForEach(GallerySort.allCases.filter { source == .privateLibrary || ($0 != .largest && $0 != .recentlyImported && $0 != .relevance) }) { Text($0.title).tag($0) }
                     }
                 }
                 if source == .privateLibrary {
@@ -228,7 +338,7 @@ struct GalleryView: View {
                         Picker("Format", selection: $formatFilter) { ForEach(GalleryFormatFilter.allCases) { Text($0.title).tag($0) } }
                         Picker("Tag", selection: $tagFilter) {
                             Text("Any tag").tag("")
-                            ForEach(Array(Set(model.organization.items.values.flatMap(\.tags))).sorted(), id: \.self) { Text($0).tag($0) }
+                            ForEach(Array(Set(model.organization.items.values.filter { $0.deletedAt == nil }.flatMap(\.tags))).sorted(), id: \.self) { Text($0).tag($0) }
                         }
                     }
                 }
@@ -244,7 +354,7 @@ struct GalleryView: View {
                         Text("Any length").tag(0.0); Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0)
                     }
                 }
-                Section { Button("Reset Filters") { sort = .newest; formatFilter = .all; tagFilter = ""; dateFilter = false; minimumDuration = 0 } }
+                Section { Button("Reset Filters") { sort = .relevance; formatFilter = .all; tagFilter = ""; dateFilter = false; minimumDuration = 0 } }
             }
             .navigationTitle("Sort & Filter").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsFilters = false } } }

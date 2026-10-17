@@ -86,6 +86,16 @@ enum GalleryVisualSearch {
     }
 
     struct Matcher: Sendable {
+        struct Query: Sendable {
+            let phrase: String
+            let words: [String]
+            init(_ value: String) { phrase = normalized(String(value.prefix(512))); words = queryWords(phrase) }
+        }
+        struct Document: Sendable {
+            let text: String
+            let words: Set<String>
+            let visualWords: Set<String>
+        }
         private var aliasesByLabel: [String: Set<String>] = [:]
         init(groups: [GallerySearchAliasGroup]) {
             for group in groups {
@@ -94,18 +104,19 @@ enum GalleryVisualSearch {
             }
         }
         func matches(_ query: String, text: String, tags: [GalleryVisualTag]) -> Bool {
-            let q = normalized(String(query.prefix(512)))
-            guard !q.isEmpty else { return true }
+            matches(Query(query), document: prepare(text: text, tags: tags))
+        }
+        func prepare(text: String, tags: [GalleryVisualTag]) -> Document {
             let ordinary = normalized(text)
-            if ordinary.contains(q) { return true }
             let visualWords = Set(tags.flatMap { tag in
                 let label = normalized(tag.label)
                 return (aliasesByLabel[label] ?? [label]).flatMap { $0.split(separator: " ").map(String.init) }
             })
-            let tokens = queryWords(q)
-            guard !tokens.isEmpty else { return false }
-            let textWords = Set(ordinary.split(separator: " ").map(String.init))
-            return tokens.allSatisfy { textWords.contains($0) || visualWords.contains($0) }
+            return Document(text: ordinary, words: Set(ordinary.split(separator: " ").map(String.init)), visualWords: visualWords)
+        }
+        func matches(_ query: Query, document: Document) -> Bool {
+            if query.phrase.isEmpty || document.text.contains(query.phrase) { return true }
+            return !query.words.isEmpty && query.words.allSatisfy { document.words.contains($0) || document.visualWords.contains($0) }
         }
     }
 }

@@ -52,13 +52,17 @@ enum VideoSanitizer {
         let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
         guard rect.width.isFinite, rect.height.isFinite, rect.minX.isFinite, rect.minY.isFinite,
               rect.width >= 1, rect.height >= 1, max(rect.width, rect.height) <= 16_384 else { throw VideoError.unsupported }
-        let maximumEdge = Double(edits.videoMaximumEdge)
-        let scale = min(1, maximumEdge / max(rect.width, rect.height), maximumEdge * 9 / 16 / min(rect.width, rect.height))
-        let width = max(2, Int(rect.width * scale) / 2 * 2)
-        let height = max(2, Int(rect.height * scale) / 2 * 2)
+        let plan = try GalleryVideoOutputPlan.make(size: rect.size, sourceFrameRate: Double(frameRate), edits: edits)
+        let width = plan.width, height = plan.height
+        let scale = min(Double(width) / rect.width, Double(height) / rect.height)
         let composition = AVMutableVideoComposition()
         composition.renderSize = CGSize(width: width, height: height)
-        composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, min(30, frameRate > 0 ? frameRate.rounded() : 30))))
+        composition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        composition.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+        composition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+        // CMTime(seconds:) truncates. A nominal Float rate can otherwise put
+        // each request just before the source frame and repeat/drop frames.
+        composition.frameDuration = CMTime(value: Int64((600_000 / plan.frameRate).rounded(.up)), timescale: 600_000)
         let instruction = AVMutableVideoCompositionInstruction()
         instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
         let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
@@ -77,15 +81,18 @@ enum VideoSanitizer {
         guard reader.canAdd(videoOutput) else { throw VideoError.unsupported }
         reader.add(videoOutput)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        writer.movieTimeScale = 600_000
         writer.metadata = metadata(profile)
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: edits.videoMaximumEdge == 960 ? 2_000_000 : edits.videoMaximumEdge == 1_280 ? 4_000_000 : 8_000_000,
+            AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2, AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2],
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: plan.bitRate,
+                AVVideoExpectedSourceFrameRateKey: plan.frameRate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]
         ])
         videoInput.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput,
-            sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        videoInput.mediaTimeScale = 600_000
         guard writer.canAdd(videoInput) else { throw VideoError.unsupported }
         writer.add(videoInput)
 
@@ -123,8 +130,22 @@ enum VideoSanitizer {
                         guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw VideoError.conversionFailed }
                         try edits.redact(buffer, at: CMSampleBufferGetPresentationTimeStamp(sample).seconds)
                         CVBufferRemoveAllAttachments(buffer)
-                        guard adaptor.append(buffer, withPresentationTime: CMSampleBufferGetPresentationTimeStamp(sample)) else { throw VideoError.conversionFailed }
+                        // Supply an explicit duration: appending only a pixel
+                        // buffer lets the writer guess the final frame length.
+                        var format: CMVideoFormatDescription?
+                        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                            imageBuffer: buffer, formatDescriptionOut: &format) == noErr, let format else { throw VideoError.conversionFailed }
+                        var timing = CMSampleTimingInfo(duration: composition.frameDuration,
+                            presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sample), decodeTimeStamp: .invalid)
+                        var frame: CMSampleBuffer?
+                        guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer,
+                            formatDescription: format, sampleTiming: &timing, sampleBufferOut: &frame) == noErr,
+                            let frame else { throw VideoError.conversionFailed }
+                        CMRemoveAllAttachments(frame)
+                        guard videoInput.append(frame) else { throw VideoError.conversionFailed }
                         frameCount += 1
+                        if frameCount.isMultiple(of: 60),
+                           (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > PrivateMediaStore.maximumBytes { throw VideoError.tooLarge }
                     } else { videoFinished = true; videoInput.markAsFinished() }
                     advanced = true
                 }
@@ -143,6 +164,7 @@ enum VideoSanitizer {
             await writer.finishWriting()
             try Task.checkCancellation()
             guard writer.status == .completed else { throw VideoError.conversionFailed }
+            guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= PrivateMediaStore.maximumBytes else { throw VideoError.tooLarge }
             try QuickTimeTimestamps.rewrite(url, date: profile?.capturedAt)
             try MediaFileProtection.protect(url)
             try await verify(url: url, profile: profile)

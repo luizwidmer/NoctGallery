@@ -12,7 +12,10 @@ struct GalleryInboxView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("Import Incoming Files", systemImage: "square.and.arrow.down") { Task { await model.importIncoming() } }
                     .disabled(model.incomingCount == 0 || model.isProcessing || !model.privateUnlocked)
-                if model.isProcessing { ProgressView(model.processingMessage ?? "Importing…") }
+                if model.isProcessing {
+                    ProgressView(model.processingMessage ?? "Importing…")
+                    Button("Cancel Import") { model.cancelImport() }
+                }
                 if let error = model.inboxUnavailable { Text(error).foregroundStyle(.secondary) }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             }
@@ -26,6 +29,7 @@ struct GalleryInboxView: View {
         .navigationTitle("Incoming Shares").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         .task { await model.refreshInbox() }.refreshable { await model.refreshInbox() }
+        .sheet(item: $model.importReport) { GalleryImportResultsView(report: $0) }
         .confirmationDialog("Discard all incoming files?", isPresented: $confirmsDiscard) {
             Button("Discard Incoming Files", role: .destructive) { Task { await model.discardIncoming() } }
         } message: { Text("Encrypted files waiting for import will be deleted. Your private gallery stays intact.") }

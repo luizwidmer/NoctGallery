@@ -56,15 +56,16 @@ Physical builds must provision the main app and `NoctGalleryImport` extension wi
 | Workflow | What you can do |
 | --- | --- |
 | Private library | Browse Photos, copy cleaned media, or move supported originals into encrypted storage. |
-| Viewing | Open a fullscreen viewer with pinch/double-tap zoom, swipe navigation and video playback. |
+| Viewing | Open fullscreen immediately, navigate a filmstrip, and edit/share/inspect from the viewer. Adjustable grid density, date groups and an iPad album sidebar. |
 | Private camera | Capture directly into Gallery, with tap focus, exposure, zoom, grid, flash and photo timer controls. |
 | Deliberate sharing | Move/resize blur areas, undo/redo, zoom, track video blur or add keyframes, trim clips and silence selected audio intervals. Review the encoded copy before sharing. |
 | Smart Search | Off by default. On-device object/scene tags, editable synonyms and local AI interpretation on supported Apple Intelligence devices. Tags and synonyms stay encrypted. |
 | Organization | Encrypted albums, favorites, tags, captions and notes; date/media/format/tag/duration filters and multiple sort orders; batch actions. |
-| Photo editing | Save reversible crop, quarter-turn rotation and straightening recipes; keep original bytes intact. |
-| Import | Preserve supported original files from Files or the encrypted share-sheet inbox. Source files remain in their original apps. |
+| Photo editing | Crop corner handles, aspect ratios, precise buttons, undo/redo, original comparison and brightness/contrast/saturation. Recipes preserve original bytes. |
+| Import | Preserve supported original files from Files or the encrypted share-sheet inbox, continue after individual failures, cancel pending work and retry failed files from a per-file report. |
+| Recently Deleted | Optional encrypted recovery, off by default, with seven-day retention. Restore or delete permanently; duress/reset bypass recovery. |
 | Library tools | Inspect storage by album/item, review exact and visually similar duplicates, and optionally enable encrypted on-device text search. |
-| Sharing presets | Save photo format/size/quality, video size, audio removal and optional metadata together. |
+| Sharing presets | Save photo format/size/quality, video size/frame rate, audio removal and optional metadata together. Optional video output up to 4K/60 fps alongside smaller presets. |
 | Metadata editing | Save metadata presets and choose optional coordinates by map, search, or numeric input. |
 | App protection | Require a PIN, biometrics, a compatible physically connected USB FIDO2 key, or every selected factor. |
 | Duress actions | Reset local storage or retain selected items under a newly rotated key; rehearse with isolated sample media. |
@@ -80,8 +81,11 @@ Photos deletion can sync through iCloud Photos and leaves the item in Recently D
 ### Export profiles
 
 Still images are rebuilt from pixels. Video and audio are re-encoded as
-H.264/AAC MOV, up to 1080p at 30 fps; video inputs are limited to 4K,
-10 minutes, and 1 GB. Apple Photos originals remain unchanged.
+H.264/AAC MOV. The default is up to 1080p/30 fps; optional presets reach
+4K/60 fps where the source and device support it. Output never upscales the
+source or increases its frame rate. Exports use SDR Rec.709, including when the
+source is HDR. Video inputs remain limited to 4K, 10 minutes and 1 GB.
+Apple Photos originals remain unchanged.
 
 Metadata presets include 21 camera models across eight manufacturers and
 40 camera/lens combinations. Use compatible randomized or manual exposure,
@@ -89,7 +93,7 @@ vary dates and time zones, add an optional GPS area, omit camera identity, or
 strip optional metadata entirely. Maps uses an explicit place search; Gallery
 does not request your current location.
 
-**Prepare to Share** lets you draw, move and resize blur areas, zoom the canvas, undo/redo edits, and choose metadata or complete sharing presets. **Detect Sensitive Areas** offers faces, accurate text recognition and QR/barcode detection. Choose all text or a heuristic sensitive-text filter for contact details, numbers and document labels, and balanced or thorough scanning. Review and accept individual suggestions or blur all suggested areas. The editor and exported copy use the same Gaussian blur, applied to selected raster pixels before encoding. Video blur can stay fixed, follow automatic on-device tracking, or interpolate between manually edited keyframes. Trim, full audio removal and selected silent intervals are optional. Blur preserves coarse color and shape; detection and tracking can miss content. Inspect the whole exported copy. The next screen displays the encoded output, its size and metadata, and compares removed/changed fields. Batch sharing handles up to 20 copies, with a 512 MB combined export limit. Each item needs its own review for sensitive visible content.
+**Prepare to Share** lets you draw, move and resize blur areas, zoom the canvas, undo/redo edits, and choose metadata or complete sharing presets. **Detect Sensitive Areas** offers faces, accurate text recognition and QR/barcode detection. Choose all text or a heuristic sensitive-text filter for contact details, numbers and document labels, and balanced or thorough scanning. Review and accept individual suggestions or blur all suggested areas. The editor and exported copy use the same Gaussian blur, applied to selected raster pixels before encoding. Video blur can stay fixed, follow automatic on-device tracking, or interpolate between manually edited keyframes. Trim, full audio removal and selected silent intervals are optional. Blur preserves coarse color and shape; detection and tracking can miss content. Inspect the whole exported copy. The next screen displays the encoded output, its size and metadata, and compares removed/changed fields. Batch sharing handles up to 20 copies, with a 512 MB combined export limit for standard settings or 1 GB when 4K or 60 fps is selected. Size estimates are approximate; actual output is checked during and after encoding. Each item needs its own review for sensitive visible content.
 
 Photo tagging, AI phrase interpretation and text indexing are **off by default**, including for existing vaults with no saved preference. Smart Search is hidden on devices that do not support Apple Intelligence. On supported devices with Apple Intelligence off or its model not ready, its entry points and AI controls are gray and disabled, with an explanation in Settings. Gallery rechecks availability when returning to the foreground; saved opt-ins cannot bypass it. Background tagging and interpretation stop when support is unavailable.
 
@@ -101,11 +105,19 @@ With Apple Intelligence enabled and ready, open **Library Tools → Smart Search
 
 Albums, tags, favorites, captions, notes and photo recipes are encrypted in the vault and available only while unlocked. Search includes album names, tags, captions and notes. Optional **Private Text Search** reads text on-device and saves an encrypted transcript in the vault; disabling it deletes those transcripts. No system search index is created. Text indexing checks up to 500 photos per run. Duplicate review compares authenticated original bytes for up to 500 items and visual similarity for up to 300 photo thumbnails; select a batch to choose which items are scanned. Similarity is a suggestion, and deletion is always manual. Batch organization and deletion accept up to 500 selected items. Deleting an album keeps its media.
 
-Saved crop/rotation/straightening recipes apply to private previews and newly shared copies. Resetting a recipe restores the original view. The storage dashboard reports encrypted item bytes, original media bytes, album totals, largest items and temporary work/export files. Items in multiple albums contribute to each album total.
+Saved crop/rotation/straightening and light/color recipes apply to private previews and newly shared copies. The photo editor offers corner handles, fixed aspect ratios, precise non-drag adjustments, original comparison and a bounded undo/redo history. The video editor shows a frame filmstrip, a transient audio waveform, trim boundaries, selected blur keyframes and muted intervals; frame and keyframe buttons provide precise navigation. Resetting a recipe restores the original view. The storage dashboard reports Recently Deleted storage separately from active encrypted item bytes, original media bytes, album totals, largest items and temporary work/export files. Items in multiple albums contribute to each album total.
+
+### Browsing, search and recovery
+
+Tapping a gallery item opens fullscreen with a neighboring filmstrip and direct favorite, edit, share, information and delete controls. Choose a two-, three- or four-column phone grid (twice that on iPad) and optional month grouping. iPad has an album/tools sidebar. Appearance choices use protected app settings.
+
+Search ranks saved textual matches before recognized objects and inferred subjects, and shows the reason for each match. Explicit English scopes use actual stored metadata: `photos coffee last month`, `type:video bicycle in 2025`, or `album:"Weekend Away"`. Date ranges have an exclusive end and respect the local calendar; album scopes require real membership. The subject alone is sent to the optional local interpreter. A transient incremental search index avoids repeated normalization; lock drops it. Private thumbnails use a 24 MiB/128-item memory cache, discarded on recipe changes, memory warnings and lock.
+
+**Recently Deleted** is off until enabled in Settings. Ordinary deletion then retains the encrypted originals and organization for seven days. Retained items are excluded from browsing, search, analysis and sharing; restore them before opening or exporting. Expired files are removed on the next unlock or foreground refresh while unlocked. Permanent deletion is available immediately. Disabling recovery with retained items requires either restoring them or explicitly confirming their permanent removal. Duress and Purge/Reset bypass the bin, even if a retained-decoy selection previously included a deleted item. Recovery cannot restore media deleted before it was enabled or copies erased by duress/reset.
 
 ### Files and incoming shares
 
-The Files importer accepts up to 20 supported images or videos at a time, bounded to 1 GB per file and the image/video decode limits. It detects the actual media format, encrypts preserved originals and verifies them before completing an import. It never deletes the source in Files.
+The Files importer accepts up to 20 supported images or videos at a time, bounded to 1 GB per file and the image/video decode limits. It detects the actual media format, encrypts preserved originals and verifies them before completing an import. It never deletes the source in Files. An individual failure does not stop later files. A per-file report offers retry for failed/cancelled files without importing successful files again. Cancel stops pending files and cancels active conversion. Retry URLs and source filenames remain in memory and are cleared on lock; after relaunch, select Files sources again. Incoming failures remain encrypted in the queue.
 
 Gallery's share extension encrypts incoming files directly into a protected, backup-excluded App Group inbox using a public recipient key. The vault key and recipient private key remain available only to the main app. The inbox holds at most 20 files and 1 GB total; open Gallery and unlock to import or discard them. Queued files are removed only after the vault copy verifies. The extension does not unlock or expose the private library. This is a local iOS import destination; no account, relay or transfer service participates.
 
@@ -145,6 +157,7 @@ Decoy metadata is optional synthetic data based on documented equipment. It is n
 
 | Read | For |
 | --- | --- |
+| [0.6.0 implementation and validation](Docs/Release-0.6.0.md) | Fullscreen, recovery, search, editing, import and quality changes |
 | [Metadata and format guide](Docs/MediaMetadata.md) | Formats, presets, and conversion tradeoffs |
 | [Security model](SECURITY.md) | Storage, authentication, and reporting |
 | [Smart Search and blur verification](Docs/Validation-2026-10-09-SmartSearch.md) | Object/context searches, detection, encoded blur and execution limits |

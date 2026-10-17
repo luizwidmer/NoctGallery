@@ -7,6 +7,7 @@ struct AssetDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let asset: PhotoAssetRecord
     var sequence: [PhotoAssetRecord] = []
+    var isViewerInformation = false
     @State private var fullscreen = false
     @State private var showsPhotoEditor = false
     @State private var showsNotes = false
@@ -26,7 +27,7 @@ struct AssetDetailView: View {
                 .aspectRatio(previewAspectRatio, contentMode: .fit).frame(maxHeight: 560)
                 .background(.black.opacity(0.86)).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
-                Button("View Fullscreen", systemImage: "arrow.up.left.and.arrow.down.right") { fullscreen = true }
+                if !isViewerInformation { Button("View Fullscreen", systemImage: "arrow.up.left.and.arrow.down.right") { fullscreen = true } }
 
                 if asset.originalKind == .livePhoto, asset.source == .privateLibrary {
                     DisclosureGroup("Play Live Photo") {
@@ -77,12 +78,14 @@ struct AssetDetailView: View {
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
                 VStack(spacing: 12) {
+                    if !isViewerInformation {
                     Button {
                         model.beginShare([asset], profile: asset.decoyProfile)
                     } label: {
                         Label("Prepare to Share", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
+                    }
 
                     if asset.source == .photos {
                         Button {
@@ -124,9 +127,9 @@ struct AssetDetailView: View {
                             if asset.originalKind == nil {
                                 Button("Edit Saved Metadata", systemImage: "pencil") { showsMetadata = true }
                             }
-                            Button("Share Without Metadata", systemImage: "shield.checkered") {
+                            if !isViewerInformation { Button("Share Without Metadata", systemImage: "shield.checkered") {
                                 model.beginShare([asset])
-                            }
+                            } }
                             Button("Delete Private Item", systemImage: "trash", role: .destructive) { confirmDelete = true }
                         } label: { Label("More Options", systemImage: "ellipsis.circle").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
@@ -137,7 +140,7 @@ struct AssetDetailView: View {
                     ProgressView(model.processingMessage ?? "Processing…").padding(.vertical, 8)
                 }
                 Text(asset.kind == .video
-                     ? "Video shares: up to 1080p at 30 fps, without source metadata."
+                     ? "Choose smaller video copies or higher-quality exports up to 4K and 60 fps. Source metadata is removed."
                      : "Sharing creates a temporary copy. The source stays unchanged.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
@@ -160,10 +163,10 @@ struct AssetDetailView: View {
             }
         }
         .confirmationDialog("Delete this private \(asset.kind.rawValue)?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete Permanently", role: .destructive) {
+            Button(model.organization.recentlyDeletedEnabled == true ? "Move to Recently Deleted" : "Delete Permanently", role: .destructive) {
                 Task { await model.deletePrivate(asset); if !model.privateAssets.contains(where: { $0.id == asset.id }) { dismiss() } }
             }
-        } message: { Text("This deletes the private copy from Noct Gallery. It cannot be undone.") }
+        } message: { Text(model.organization.recentlyDeletedEnabled == true ? "The private copy can be restored for seven days." : "This deletes the private copy from Noct Gallery. It cannot be undone.") }
     }
 
     private var previewAspectRatio: CGFloat {

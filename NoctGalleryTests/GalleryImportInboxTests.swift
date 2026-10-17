@@ -126,6 +126,37 @@ final class GalleryImportInboxTests: XCTestCase {
         }
     }
 
+    func testIncomingFailureKeepsEncryptedQueueAndContinuesOtherFiles() async throws {
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "GalleryPartialInbox-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite)), settings = GallerySettingsStore(service: suite, defaults: defaults)
+        defer { try? settings.purge(); defaults.removePersistentDomain(forName: suite) }
+        let credentials = GalleryLockStore(persistence: MemoryGalleryLockPersistence())
+        _ = try await credentials.configure(mode: .off, pin: "", keys: [])
+        let store = PrivateMediaStore(root: root.appendingPathComponent("vault"), keys: MemoryPrivateMediaKeys())
+        let keys = MemoryGalleryInboxKeys(), inbox = GalleryImportInbox(root: root.appendingPathComponent("inbox"))
+        let model = GalleryViewModel(exportStore: TemporaryExportStore(rootURL: root.appendingPathComponent("exports")),
+            privateStore: store, workStore: MediaWorkStore(root: root.appendingPathComponent("work")),
+            defaults: defaults, lock: GalleryLockController(store: credentials), preferencesDomain: suite,
+            settingsStore: settings, inbox: inbox, inboxKeys: keys)
+        await model.start(); _ = await model.unlockPrivate()
+        let good = root.appendingPathComponent("good.png"), bad = root.appendingPathComponent("bad.png")
+        try GalleryDuressPractice.sampleImage(index: 0).write(to: good)
+        try Data("corrupt".utf8).write(to: bad)
+        _ = try inbox.enqueue(source: good, typeIdentifier: UTType.png.identifier)
+        _ = try inbox.enqueue(source: bad, typeIdentifier: UTType.png.identifier)
+        _ = try inbox.enqueue(source: good, typeIdentifier: UTType.png.identifier)
+        await model.importIncoming()
+        XCTAssertEqual(model.privateAssets.count, 2)
+        XCTAssertEqual(model.importReport?.succeeded, 2)
+        XCTAssertTrue(model.importReport?.incoming == true)
+        XCTAssertEqual(try inbox.pending().count, 1)
+        await model.importIncoming()
+        XCTAssertEqual(model.privateAssets.count, 2, "Retry must not duplicate successful incoming files")
+        XCTAssertEqual(try inbox.pending().count, 1, "Failed originals remain encrypted until explicitly discarded")
+        await model.lockPrivate(); XCTAssertNil(model.importReport)
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("GalleryInboxTests-" + UUID().uuidString)
         try MediaFileProtection.prepareDirectory(root); return root

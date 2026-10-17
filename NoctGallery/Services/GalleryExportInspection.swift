@@ -18,6 +18,7 @@ struct GalleryExportInspection: Sendable {
     let duration: Double
     let hasAudio: Bool
     let fields: [GalleryMetadataField]
+    var frameRate: Double? = nil
 
     static func inspect(url: URL, kind: GalleryMediaKind) async throws -> Self {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
@@ -36,7 +37,7 @@ struct GalleryExportInspection: Sendable {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw VideoSanitizer.VideoError.unsupported }
         let dimensions = try await track.load(.naturalSize)
         return try await .init(byteCount: size, width: Int(dimensions.width), height: Int(dimensions.height), duration: duration,
-            hasAudio: !asset.loadTracks(withMediaType: .audio).isEmpty, fields: videoFields(asset))
+            hasAudio: !asset.loadTracks(withMediaType: .audio).isEmpty, fields: videoFields(asset), frameRate: Double(track.load(.nominalFrameRate)))
     }
 
     static func photoFields(_ data: Data) throws -> [GalleryMetadataField] {

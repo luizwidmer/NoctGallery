@@ -81,6 +81,13 @@ final class VideoSanitizerTests: XCTestCase {
         let range = CMTimeRange(start: .zero, duration: duration)
         try videoTrack.insertTimeRange(range, of: XCTUnwrap(videoTracks.first), at: .zero)
         try audioTrack.insertTimeRange(range, of: XCTUnwrap(audioTracks.first), at: .zero)
+        let timeline = try await GalleryTimelineAnalysis.load(composition)
+        XCTAssertEqual(timeline.frames.count, 12); XCTAssertEqual(timeline.waveform.count, 96)
+        XCTAssertGreaterThan(timeline.waveform.max() ?? 0, 0.05)
+        XCTAssertTrue(timeline.frames.allSatisfy { !$0.jpeg.isEmpty && $0.time >= 0 && $0.time < duration.seconds })
+        let cancelledTimeline = Task { try await GalleryTimelineAnalysis.load(composition) }
+        cancelledTimeline.cancel()
+        do { _ = try await cancelledTimeline.value; XCTFail("Cancelled timeline completed") } catch is CancellationError {}
         let output = directory.appendingPathComponent("with-audio.mov")
         _ = try await VideoSanitizer.sanitize(asset: composition, to: output, profile: nil)
         let resultTracks = try await AVURLAsset(url: output).loadTracks(withMediaType: .audio)
@@ -206,6 +213,88 @@ final class VideoSanitizerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path))
     }
 
+    func test4K60CleanExportAndSourceQualityCaps() async throws {
+        var edits = GalleryShareEdits(); edits.videoMaximumEdge = 3_840; edits.videoMaximumFrameRate = 60
+        let full = try GalleryVideoOutputPlan.make(size: CGSize(width: 3_840, height: 2_160), sourceFrameRate: 60, edits: edits)
+        XCTAssertEqual(full.width, 3_840); XCTAssertEqual(full.height, 2_160); XCTAssertEqual(full.frameRate, 60)
+        let smaller = try GalleryVideoOutputPlan.make(size: CGSize(width: 1_280, height: 720), sourceFrameRate: 23.976, edits: edits)
+        XCTAssertEqual(smaller.width, 1_280); XCTAssertEqual(smaller.height, 720); XCTAssertEqual(smaller.frameRate, 23.976)
+        let slow = try GalleryVideoOutputPlan.make(size: CGSize(width: 640, height: 480), sourceFrameRate: 0.5, edits: edits)
+        XCTAssertEqual(slow.frameRate, 0.5, "Very low-rate footage must not be upsampled")
+        XCTAssertThrowsError(try GalleryVideoOutputPlan.make(size: CGSize(width: 1, height: 480), sourceFrameRate: 30, edits: edits))
+        let defaultPlan = try GalleryVideoOutputPlan.make(size: CGSize(width: 3_840, height: 2_160), sourceFrameRate: 60, edits: .init())
+        XCTAssertEqual(defaultPlan.width, 1_920); XCTAssertEqual(defaultPlan.frameRate, 30)
+        XCTAssertGreaterThan(full.estimatedBytes(duration: 10), smaller.estimatedBytes(duration: 10))
+        XCTAssertEqual(full.estimatedBytes(duration: .infinity), 0)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try MediaFileProtection.prepareDirectory(directory); defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("4k-source.mov")
+        let writer = try AVAssetWriter(outputURL: source, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 3_840, AVVideoHeightKey: 2_160])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 3_840, kCVPixelBufferHeightKey as String: 2_160,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
+        writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+        var pixel: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &pixel), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(pixel)
+        CVPixelBufferLockBaseAddress(buffer, [])
+        memset(try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer)), 150, CVPixelBufferGetBytesPerRow(buffer) * 2_160)
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        for frame in 0..<12 {
+            while !input.isReadyForMoreMediaData {
+                guard writer.status == .writing else { throw VideoSanitizer.VideoError.conversionFailed }
+                try await Task.sleep(for: .milliseconds(2))
+            }
+            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 60)))
+        }
+        input.markAsFinished(); await writer.finishWriting(); XCTAssertEqual(writer.status, .completed)
+        edits.redactions = [.init(rect: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3))]
+        let output = directory.appendingPathComponent("clean-4k60.mov")
+        _ = try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: output, profile: nil, edits: edits)
+        let inspection = try await GalleryExportInspection.inspect(url: output, kind: .video)
+        XCTAssertEqual(inspection.width, 3_840); XCTAssertEqual(inspection.height, 2_160)
+        XCTAssertEqual(try XCTUnwrap(inspection.frameRate), 60, accuracy: 0.1)
+        try await VideoSanitizer.verify(url: output, profile: nil)
+        try QuickTimeTimestamps.verify(output, date: nil)
+    }
+
+    func testFractionalSourceFrameRateIsPreservedWithoutUpscaling() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try MediaFileProtection.prepareDirectory(directory); defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("fractional.mov"), output = directory.appendingPathComponent("clean.mov")
+        try await videoFixture(source, timeScale: 24_000, timeStep: 1_001)
+        var edits = GalleryShareEdits(); edits.videoMaximumEdge = 3_840; edits.videoMaximumFrameRate = 60
+        _ = try await VideoSanitizer.sanitize(asset: AVURLAsset(url: source), to: output, profile: nil, edits: edits)
+        let inspection = try await GalleryExportInspection.inspect(url: output, kind: .video)
+        XCTAssertEqual(inspection.width, 64); XCTAssertEqual(inspection.height, 48)
+        let sourceInspection = try await GalleryExportInspection.inspect(url: source, kind: .video)
+        func timing(_ url: URL) async throws -> [String: Any] {
+            let asset = AVURLAsset(url: url)
+            let reader = try AVAssetReader(asset: asset)
+            let tracks = try await asset.loadTracks(withMediaType: .video), track = try XCTUnwrap(tracks.first)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            reader.add(output); XCTAssertTrue(reader.startReading())
+            var samples: [[Double]] = []
+            while let sample = output.copyNextSampleBuffer() {
+                let duration = CMSampleBufferGetDuration(sample).seconds
+                let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+                if pts.isFinite { samples.append([pts, duration.isFinite ? duration : -1]) }
+            }
+            let minimum = try await track.load(.minFrameDuration).seconds
+            return ["samples": samples, "trackRange": try await track.load(.timeRange).duration.seconds,
+                "minimumFrameDuration": minimum.isFinite ? minimum : -1]
+        }
+        let details: [String: Any] = ["sourceRate": sourceInspection.frameRate ?? 0, "sourceDuration": sourceInspection.duration,
+            "outputRate": inspection.frameRate ?? 0, "outputDuration": inspection.duration,
+            "sourceTiming": try await timing(source), "outputTiming": try await timing(output)]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: details, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "fractional-video-timing"; attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertEqual(try XCTUnwrap(inspection.frameRate), 24_000.0 / 1_001, accuracy: 0.001)
+    }
+
     private func audioLevel(_ url: URL, from start: Double, to end: Double) async throws -> Double {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
@@ -272,8 +361,9 @@ final class VideoSanitizerTests: XCTestCase {
         XCTAssertEqual(writer.status, .completed)
     }
 
-    private func videoFixture(_ url: URL, rotated: Bool = false) async throws {
+    private func videoFixture(_ url: URL, rotated: Bool = false, timeScale: CMTimeScale = 30, timeStep: CMTimeValue = 1) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        writer.movieTimeScale = timeScale
         let secret = AVMutableMetadataItem()
         secret.identifier = .quickTimeMetadataMake
         secret.value = "private-camera-identifier" as NSString
@@ -281,6 +371,7 @@ final class VideoSanitizerTests: XCTestCase {
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 48
         ])
+        input.mediaTimeScale = timeScale
         if rotated { input.transform = CGAffineTransform(rotationAngle: .pi / 2) }
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
             sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -307,9 +398,10 @@ final class VideoSanitizerTests: XCTestCase {
                 } }
             }
             CVPixelBufferUnlockBaseAddress(buffer, [])
-            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 30)))
+            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index) * timeStep, timescale: timeScale)))
         }
         input.markAsFinished()
+        writer.endSession(atSourceTime: CMTime(value: 30 * timeStep, timescale: timeScale))
         await writer.finishWriting()
         XCTAssertEqual(writer.status, .completed)
     }

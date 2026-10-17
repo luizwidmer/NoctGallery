@@ -7,6 +7,7 @@ struct GallerySettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsResetConfirmation = false
     @State private var resetConfirmation = ""
+    @State private var confirmsDisableRecovery = false
 
     var body: some View {
         NavigationStack {
@@ -69,6 +70,13 @@ struct GallerySettingsView: View {
                 }
 
                 Section("Privacy & storage") {
+                    Toggle("Recently Deleted", isOn: Binding(get: { model.organization.recentlyDeletedEnabled == true }, set: { enabled in
+                        if !enabled, !model.recentlyDeletedItems.isEmpty { confirmsDisableRecovery = true }
+                        else { Task { await model.setRecentlyDeleted(enabled: enabled) } }
+                    })).disabled(!model.privateUnlocked || model.isOrganizing)
+                    Text("Off by default. When enabled, ordinary deletions can be restored for seven days. Expired items are purged when Gallery runs while unlocked. Duress and reset erase them immediately.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if model.organization.recentlyDeletedEnabled == true { NavigationLink("Recently Deleted (\(model.recentlyDeletedItems.count))", destination: GalleryRecentlyDeletedView()) }
                     NavigationLink("Storage", destination: GalleryStorageView())
                     if model.showsSmartSearch {
                         NavigationLink("Smart Search", destination: GallerySmartSearchView())
@@ -83,7 +91,7 @@ struct GallerySettingsView: View {
                     NavigationLink("Find Duplicates", destination: GalleryDuplicatesView())
                     NavigationLink("Incoming Shares", destination: GalleryInboxView())
                     DisclosureGroup("How sharing works") {
-                        Text("Sharing creates clean copies; originals stay unchanged. Video shares use H.264/AAC, up to 1080p at 30 fps.")
+                        Text("Sharing creates clean copies; originals stay unchanged. Choose compact video copies or higher-quality H.264/AAC exports up to 4K and 60 fps, within source and device capabilities. Exports use standard dynamic range.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -130,6 +138,9 @@ struct GallerySettingsView: View {
             .scrollContentBackground(.hidden)
             .background(NoctGalleryTheme.background(for: colorScheme))
             .navigationTitle("Settings")
+            .confirmationDialog("Turn off Recently Deleted?", isPresented: $confirmsDisableRecovery, titleVisibility: .visible) {
+                Button("Delete Retained Items and Turn Off", role: .destructive) { Task { await model.setRecentlyDeleted(enabled: false, emptyFirst: true) } }
+            } message: { Text("Items currently in Recently Deleted will be permanently erased. You can restore them first instead.") }
             .alert("Purge and reset Noct Gallery?", isPresented: $showsResetConfirmation) {
                 TextField("Type RESET to confirm", text: $resetConfirmation)
                     .textInputAutocapitalization(.characters)

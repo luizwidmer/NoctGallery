@@ -14,6 +14,7 @@ struct GalleryItemOrganization: Codable, Equatable, Sendable {
     var recognizedText: String?
     var visualTags: [GalleryVisualTag]?
     var photoEdits: GalleryPhotoEdits?
+    var deletedAt: Date?
 }
 
 /// Kept inside the encrypted vault, never in preferences or a system search index.
@@ -25,6 +26,7 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
     var visualSearchEnabled: Bool?
     var searchAliasGroups: [GallerySearchAliasGroup]?
     var aiQueryInterpretationEnabled: Bool?
+    var recentlyDeletedEnabled: Bool?
 
     var effectiveSearchAliasGroups: [GallerySearchAliasGroup] { searchAliasGroups ?? GalleryVisualSearch.defaultAliasGroups }
     var searchMatcher: GalleryVisualSearch.Matcher {
@@ -46,7 +48,8 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
                   item.notes.map({ $0.count <= 8_000 && $0.utf8.count <= 32_000 }) != false,
                   item.recognizedText.map({ $0.count <= 16_000 && $0.utf8.count <= 64_000 }) != false,
                   item.visualTags.map({ $0.count <= 24 && $0.allSatisfy(\.isValid) && Set($0.map { GalleryVisualSearch.normalized($0.label) }).count == $0.count }) != false,
-                  item.photoEdits.map({ (try? $0.validated()) != nil }) != false else { throw PrivateMediaStore.StoreError.invalidRecord }
+                  item.photoEdits.map({ (try? $0.validated()) != nil }) != false,
+                  item.deletedAt.map({ $0.timeIntervalSince1970.isFinite && $0 > .distantPast && $0 < .distantFuture }) != false else { throw PrivateMediaStore.StoreError.invalidRecord }
         }
         return self
     }
@@ -66,7 +69,7 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
     }
 
     func searchText(for id: String) -> String {
-        guard let item = items[id] else { return "" }
+        guard let item = items[id], item.deletedAt == nil else { return "" }
         var parts = item.tags + albums.filter { item.albumIDs.contains($0.id) }.map(\.name)
         parts += [item.caption, item.notes].compactMap { $0 }
         if textSearchEnabled == true, let text = item.recognizedText { parts.append(text) }
@@ -75,6 +78,7 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
 
     func matches(_ query: String, id: String, extraText: String = "", using matcher: GalleryVisualSearch.Matcher? = nil,
                  interpretation: GallerySearchQueryPlan? = nil) -> Bool {
+        guard items[id]?.deletedAt == nil else { return false }
         let matcher = matcher ?? searchMatcher, text = searchText(for: id) + " " + extraText
         let tags = visualSearchEnabled == true ? (items[id]?.visualTags ?? []) : []
         let literal = matcher.matches(query, text: text, tags: tags)
@@ -92,7 +96,7 @@ struct GalleryOrganization: Codable, Equatable, Sendable {
     var visualSearchVocabulary: [String] {
         guard visualSearchEnabled == true, aiQueryInterpretationEnabled == true else { return [] }
         var counts: [String: Int] = [:]
-        for item in items.values { for tag in item.visualTags ?? [] where tag.isValid { counts[tag.label, default: 0] += 1 } }
+        for item in items.values where item.deletedAt == nil { for tag in item.visualTags ?? [] where tag.isValid { counts[tag.label, default: 0] += 1 } }
         return counts.keys.sorted {
             counts[$0] == counts[$1] ? $0 < $1 : counts[$0, default: 0] > counts[$1, default: 0]
         }.prefix(256).sorted()

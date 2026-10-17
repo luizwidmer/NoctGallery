@@ -22,14 +22,27 @@ struct PreparedGalleryMedia: Sendable {
 @MainActor
 final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
     @Published private(set) var assets: [PhotoAssetRecord] = []
-    @Published private(set) var privateAssets: [PhotoAssetRecord] = [] { didSet { scheduleVisualIndex() } }
-    @Published private(set) var organization = GalleryOrganization() {
-        didSet { queryVocabulary = queryInterpreterAvailability.isAvailable ? organization.visualSearchVocabulary : [] }
+    @Published private(set) var privateAssets: [PhotoAssetRecord] = [] {
+        didSet { privateAssetIDs = Set(privateAssets.map(\.id)); searchIndex.update(assets: privateAssets, organization: organization, previous: organization); scheduleVisualIndex() }
     }
+    @Published private(set) var organization = GalleryOrganization() {
+        didSet {
+            privateThumbnailCache.removeAllObjects()
+            queryVocabulary = queryInterpreterAvailability.isAvailable ? organization.visualSearchVocabulary : []
+            searchIndex.update(assets: privateAssets, organization: organization, previous: oldValue)
+        }
+    }
+    private(set) var searchIndex = GallerySearchIndex()
+    @Published var selectedTab = 1
+    @Published var fullscreenPresented = false
+    @Published private(set) var recentlyDeletedItems: [GalleryDeletedItem] = []
+    @Published var importReport: GalleryImportReport?
+    private var importCancelled = false
     private(set) var queryVocabulary: [String] = []
     @Published private(set) var storageItems: [String: GalleryStorageItem] = [:]
     @Published private(set) var scratchBytes: Int64 = 0
     @Published private(set) var exportBytes: Int64 = 0
+    @Published private(set) var deletedBytes: Int64 = 0
     @Published private(set) var isAnalyzing = false { didSet { if !isAnalyzing { scheduleVisualIndex() } } }
     @Published private(set) var isTagging = false
     @Published private(set) var visualTaggingPaused = false
@@ -50,6 +63,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private var searchInterpretationOperation = UUID()
     private var similarityTask: Task<[GalleryDuplicateGroup], Error>?
     private var trackingTask: Task<[GalleryCoverKeyframe], Error>?
+    private var timelineTask: Task<GalleryTimelineData, Error>?
     private var detectionTask: Task<[GalleryRedaction], Error>?
     private var detectionOperation = UUID()
     private var inboxPreparation: Task<Int, Error>?
@@ -78,6 +92,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published var shareOutputFormat: String { didSet { persistSettings() } }
     @Published var shareMaximumDimension: Int { didSet { persistSettings() } }
     @Published var shareLossyQuality: Double { didSet { persistSettings() } }
+    @Published var gridDensity: Int { didSet { persistSettings() } }
+    @Published var groupByDate: Bool { didSet { persistSettings() } }
     @Published var onboardingCompleted: Bool { didSet { persistSettings() } }
     @Published private(set) var photosConnected: Bool { didSet { persistSettings() } }
     @Published private(set) var settingsLoadError: String?
@@ -102,6 +118,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private var observesLibraryChanges = false
     private var shareExportLifecycle = ShareExportLifecycle()
     private var activeShareOperation: UUID?
+    private let privateThumbnailCache = NSCache<NSString, UIImage>()
+    private var privateAssetIDs: Set<String> = []
 
     init(library: PhotoLibraryService = PhotoLibraryService(),
          exportStore: TemporaryExportStore = TemporaryExportStore(),
@@ -144,14 +162,22 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         self.shareOutputFormat = loaded.shareOutputFormat
         self.shareMaximumDimension = loaded.shareMaximumDimension
         self.shareLossyQuality = loaded.shareLossyQuality
+        self.gridDensity = loaded.gridDensity ?? 3
+        self.groupByDate = loaded.groupByDate ?? true
         self.onboardingCompleted = loaded.onboardingCompleted
         self.photosConnected = loaded.photosConnected
         super.init()
+        privateThumbnailCache.totalCostLimit = 24 * 1_024 * 1_024
+        privateThumbnailCache.countLimit = 128
+        NotificationCenter.default.addObserver(self, selector: #selector(clearPrivateThumbnails), name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
     }
 
     deinit {
         if observesLibraryChanges { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+        NotificationCenter.default.removeObserver(self)
     }
+
+    @objc private func clearPrivateThumbnails() { privateThumbnailCache.removeAllObjects() }
 
     private func persistSettings() {
         guard !suppressSettingsWrites, settingsLoadError == nil else { return }
@@ -167,6 +193,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         next.shareOutputFormat = shareOutputFormat
         next.shareMaximumDimension = shareMaximumDimension
         next.shareLossyQuality = shareLossyQuality
+        next.gridDensity = gridDensity
+        next.groupByDate = groupByDate
         next.onboardingCompleted = onboardingCompleted
         next.photosConnected = photosConnected
         do { try settingsStore.save(next); settingsRecord = next }
@@ -192,6 +220,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             shareOutputFormat = loaded.shareOutputFormat
             shareMaximumDimension = loaded.shareMaximumDimension
             shareLossyQuality = loaded.shareLossyQuality
+            gridDensity = loaded.gridDensity ?? 3
+            groupByDate = loaded.groupByDate ?? true
             onboardingCompleted = loaded.onboardingCompleted
             photosConnected = loaded.photosConnected
             suppressSettingsWrites = false
@@ -293,6 +323,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             guard generation == operationGeneration, lock.isUnlocked else { await privateStore.lock(); return false }
             privateAssets = items
             self.organization = organization
+            recentlyDeletedItems = try await privateStore.recentlyDeleted()
             privateUnlocked = true
             privateGeneration = UUID()
             scheduleVisualIndex()
@@ -314,10 +345,15 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         privateUnlocked = false
         privateAssets = []
         organization = .init()
+        recentlyDeletedItems = []; importReport = nil; importCancelled = true
+        fullscreenPresented = false
         errorMessage = nil
-        storageItems = [:]; scratchBytes = 0; exportBytes = 0; duplicateGroups = []
+        privateThumbnailCache.removeAllObjects()
+        storageItems = [:]; scratchBytes = 0; exportBytes = 0; deletedBytes = 0; duplicateGroups = []
         let activeAnalysis = analysisTask, activeRecognition = recognitionTask, activeSimilarity = similarityTask
         let activeTracking = trackingTask
+        let activeTimeline = timelineTask
+        activeTimeline?.cancel()
         let activeVisualTags = visualTagTask
         let activeDetection = detectionTask
         let activeQuery = searchInterpretationTask
@@ -344,6 +380,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             _ = try? await activeRecognition?.value
             _ = try? await activeSimilarity?.value
             _ = try? await activeTracking?.value
+            _ = try? await activeTimeline?.value
+            timelineTask = nil
             _ = try? await activeVisualTags?.value
             _ = try? await activeDetection?.value
             _ = try? await activeQuery?.value
@@ -387,6 +425,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             shareOutputFormat = GalleryOutputFormat.heic.rawValue
             shareMaximumDimension = 8_192
             shareLossyQuality = 0.90
+            gridDensity = 3; groupByDate = true; selectedTab = 1
             photosConnected = false
             onboardingCompleted = plan.action == .retainDecoys
             var replacementSettings = GallerySettingsRecord()
@@ -408,8 +447,18 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func thumbnail(for asset: PhotoAssetRecord, targetSize: CGSize) async -> UIImage? {
         if asset.source == .photos { return try? await library.thumbnail(for: asset, targetSize: targetSize) }
-        guard privateUnlocked else { return nil }
+        guard privateUnlocked, privateAssetIDs.contains(asset.id) else { return nil }
         let generation = privateGeneration
+        let recipe = organization.items[asset.id]?.photoEdits
+        let recipeKey = (try? JSONEncoder().encode(recipe).base64EncodedString()) ?? ""
+        let cacheKey = (asset.id + (max(targetSize.width, targetSize.height) > 600 ? ":large:" : ":grid:") + recipeKey) as NSString
+        if let image = privateThumbnailCache.object(forKey: cacheKey) { return image }
+        func cache(_ image: UIImage) -> UIImage? {
+            guard generation == privateGeneration, privateUnlocked, privateAssetIDs.contains(asset.id),
+                  organization.items[asset.id]?.photoEdits == recipe else { return nil }
+            privateThumbnailCache.setObject(image, forKey: cacheKey, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
+            return image
+        }
         if asset.kind == .photo, max(targetSize.width, targetSize.height) > 600 {
             do {
                 let url = try await privateSourceURL(asset)
@@ -421,18 +470,16 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 ] as CFDictionary) }
                 try await workStore.remove(url)
                 guard generation == privateGeneration, let image else { return nil }
-                let recipe = organization.items[asset.id]?.photoEdits
                 let rendered = try await Task.detached { try recipe?.apply(to: image) ?? image }.value
                 guard generation == privateGeneration else { return nil }
-                return UIImage(cgImage: rendered)
+                return cache(UIImage(cgImage: rendered))
             } catch { return nil }
         }
         guard let data = try? await privateStore.thumbnail(id: asset.id), generation == privateGeneration else { return nil }
         guard let image = UIImage(data: data)?.cgImage else { return nil }
-        let recipe = organization.items[asset.id]?.photoEdits
         let rendered = try? await Task.detached { try recipe?.apply(to: image) ?? image }.value
         guard generation == privateGeneration, let rendered else { return nil }
-        return UIImage(cgImage: rendered)
+        return cache(UIImage(cgImage: rendered))
     }
 
     func player(for asset: PhotoAssetRecord, motion: Bool = false) async throws -> (AVPlayer, URL?) {
@@ -440,6 +487,24 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         let url = try await privateSourceURL(asset, role: motion ? .pairedVideo : nil)
         guard privateUnlocked else { try? await workStore.remove(url); throw CancellationError() }
         return (AVPlayer(url: url), url)
+    }
+
+    func timeline(for asset: PhotoAssetRecord) async throws -> GalleryTimelineData {
+        guard privateUnlocked, lock.isUnlocked else { throw PrivateMediaStore.StoreError.locked }
+        let generation = operationGeneration
+        var source: URL?
+        do {
+            let video: AVAsset
+            if asset.source == .privateLibrary { source = try await privateSourceURL(asset); video = AVURLAsset(url: source!) }
+            else { video = try await library.videoAsset(for: asset) }
+            let worker = Task.detached(priority: .utility) { try await GalleryTimelineAnalysis.load(video) }
+            timelineTask = worker
+            let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+            if let source { try await workStore.remove(source) }
+            guard generation == operationGeneration, privateUnlocked, !Task.isCancelled else { throw CancellationError() }
+            timelineTask = nil
+            return result
+        } catch { timelineTask = nil; if let source { try? await workStore.remove(source) }; throw error }
     }
 
     private func privateSourceURL(_ asset: PhotoAssetRecord, role: GalleryResourceRole? = nil) async throws -> URL {
@@ -569,7 +634,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 try? await workStore.remove(media.url)
                 prepared = nil
                 let inspection = try await GalleryExportInspection.inspect(url: url, kind: media.kind)
-                guard inspection.byteCount <= 512 * 1_024 * 1_024 - total else { throw PrivateMediaStore.StoreError.mediaTooLarge }
+                let exportLimit = edits.videoMaximumEdge > 1_920 || edits.videoMaximumFrameRate > 30 ? PrivateMediaStore.maximumBytes : 512 * 1_024 * 1_024
+                guard inspection.byteCount <= exportLimit - total else { throw PrivateMediaStore.StoreError.mediaTooLarge }
                 total += inspection.byteCount
                 reviewed.append(.init(url: url, kind: media.kind, inspection: inspection, originalMetadata: media.sourceMetadata))
             }
@@ -607,7 +673,11 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 let generator = AVAssetImageGenerator(asset: video)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 1_600, height: 1_600)
-                let result = try await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600))
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = .zero
+                guard time.isFinite, (0...600).contains(time) else { throw VideoSanitizer.VideoError.unsupported }
+                let requested = CMTime(value: Int64((time * 600_000).rounded(.up)), timescale: 600_000)
+                let result = try await generator.image(at: requested)
                 image = UIImage(cgImage: result.image)
             }
             if let source { try await workStore.remove(source) }
@@ -740,17 +810,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func deletePrivate(_ asset: PhotoAssetRecord) async {
-        guard asset.source == .privateLibrary, privateUnlocked, !isProcessing, !isOrganizing else { return }
-        let generation = operationGeneration
-        do {
-            let session = try await privateStore.currentSession()
-            try await lock.replaceDecoy(asset.id, with: nil)
-            guard generation == operationGeneration else { throw CancellationError() }
-            try await privateStore.delete(id: asset.id, session: session)
-            let items = try await privateStore.list()
-            let index = try await privateStore.organization()
-            if generation == operationGeneration, privateUnlocked { privateAssets = items; organization = index }
-        } catch { if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription } }
+        guard asset.source == .privateLibrary else { return }
+        await deletePrivateItems([asset.id])
     }
 
     func organize(_ ids: Set<String>, edit: GalleryOrganizationEdit) async {
@@ -790,14 +851,23 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func deletePrivateItems(_ ids: Set<String>) async {
-        guard ids.count <= 500 else { errorMessage = "Choose up to 500 items at a time."; return }
-        errorMessage = nil
+        guard !ids.isEmpty, ids.count <= 500 else { errorMessage = "Choose between 1 and 500 items at a time."; return }
+        guard privateUnlocked, !isResetting, !isProcessing, !isOrganizing else { return }
         let generation = operationGeneration
-        for asset in privateAssets.filter({ ids.contains($0.id) }) {
-            guard generation == operationGeneration, privateUnlocked, !isResetting, lock.isUnlocked else { return }
-            await deletePrivate(asset)
-            if errorMessage != nil { return }
-        }
+        errorMessage = nil; isOrganizing = true
+        defer { if generation == operationGeneration { isOrganizing = false } }
+        do {
+            let session = try await privateStore.currentSession()
+            for id in ids {
+                try await lock.replaceDecoy(id, with: nil)
+                guard generation == operationGeneration, privateUnlocked else { throw CancellationError() }
+            }
+            try await privateStore.remove(ids: ids, session: session)
+            let items = try await privateStore.list()
+            let index = try await privateStore.organization()
+            let deleted = try await privateStore.recentlyDeleted()
+            if generation == operationGeneration, privateUnlocked { privateAssets = items; organization = index; recentlyDeletedItems = deleted }
+        } catch { if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription } }
     }
 
     func copyPhotosToPrivate(_ assets: [PhotoAssetRecord]) async {
@@ -806,6 +876,60 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         for asset in assets {
             guard generation == operationGeneration, lock.isUnlocked, await saveToPrivate(asset: asset, profile: nil) else { return }
         }
+    }
+
+    func refreshRecentlyDeleted() async {
+        guard privateUnlocked, !isProcessing, !isOrganizing, !isResetting else { return }
+        let generation = operationGeneration
+        do {
+            try await privateStore.purgeExpiredDeleted()
+            let index = try await privateStore.organization(), deleted = try await privateStore.recentlyDeleted()
+            if generation == operationGeneration, privateUnlocked { organization = index; recentlyDeletedItems = deleted }
+        } catch { if generation == operationGeneration { errorMessage = error.localizedDescription } }
+    }
+
+    func deletedThumbnail(for item: GalleryDeletedItem) async -> UIImage? {
+        guard privateUnlocked else { return nil }
+        let generation = privateGeneration
+        do {
+            let data = try await privateStore.deletedThumbnail(id: item.id, session: privateStore.currentSession())
+            guard generation == privateGeneration, privateUnlocked,
+                  recentlyDeletedItems.contains(where: { $0.id == item.id }) else { return nil }
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 160] as CFDictionary) else { return nil }
+            return UIImage(cgImage: image)
+        } catch { return nil }
+    }
+
+    func setRecentlyDeleted(enabled: Bool, emptyFirst: Bool = false) async {
+        await editRecentlyDeleted { store, session in
+            if emptyFirst { try await store.emptyRecentlyDeleted(session: session) }
+            _ = try await store.setRecentlyDeleted(enabled: enabled, session: session)
+        }
+    }
+
+    func restoreRecentlyDeleted(_ ids: Set<String>) async {
+        await editRecentlyDeleted { store, session in try await store.restoreDeleted(ids: ids, session: session) }
+    }
+
+    func permanentlyDeleteRecentlyDeleted(_ ids: Set<String>? = nil) async {
+        await editRecentlyDeleted { store, session in try await store.emptyRecentlyDeleted(ids: ids, session: session) }
+    }
+
+    private func editRecentlyDeleted(_ operation: (PrivateMediaStore, UUID) async throws -> Void) async {
+        guard privateUnlocked, !isProcessing, !isOrganizing, !isResetting else { return }
+        let generation = operationGeneration
+        isOrganizing = true
+        defer { isOrganizing = false }
+        do {
+            let session = try await privateStore.currentSession()
+            try await operation(privateStore, session)
+            let items = try await privateStore.list(), index = try await privateStore.organization()
+            let deleted = try await privateStore.recentlyDeleted()
+            if generation == operationGeneration, privateUnlocked { privateAssets = items; organization = index; recentlyDeletedItems = deleted }
+        } catch { if generation == operationGeneration { errorMessage = error.localizedDescription } }
     }
 
     func purgeAndReset(defaults override: UserDefaults? = nil, domain: String? = Bundle.main.bundleIdentifier) async {
@@ -846,6 +970,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             shareOutputFormat = GalleryOutputFormat.heic.rawValue
             shareMaximumDimension = 8_192
             shareLossyQuality = 0.90
+            gridDensity = 3; groupByDate = true; selectedTab = 1
             onboardingCompleted = false
             photosConnected = false
             try settingsStore.purge()
@@ -899,76 +1024,109 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         incomingCount = 0
     }
 
+    func cancelImport() {
+        guard exportingAssetID == "files" || exportingAssetID == "incoming" else { return }
+        importCancelled = true; conversion?.cancel()
+    }
+
     func importFiles(_ urls: [URL]) async {
         guard privateUnlocked, !isProcessing, !isResetting else { return }
         guard !urls.isEmpty, urls.count <= 20 else { errorMessage = "Choose up to 20 files per import."; return }
         let generation = operationGeneration
+        importCancelled = false; importReport = nil
         exportingAssetID = "files"; errorMessage = nil
         defer { if generation == operationGeneration { exportingAssetID = nil; processingMessage = nil; conversion = nil } }
+        var outcomes: [GalleryImportOutcome] = []
         do {
-            let session = try await privateStore.currentSession()
-            let workSession = await workStore.currentSession()
+            let session = try await privateStore.currentSession(), workSession = await workStore.currentSession()
             for (index, source) in urls.enumerated() {
-                try Task.checkCancellation()
-                guard generation == operationGeneration else { throw CancellationError() }
+                guard generation == operationGeneration, privateUnlocked else { return }
+                let name = String(source.lastPathComponent.prefix(160))
+                if importCancelled || Task.isCancelled {
+                    outcomes.append(.init(name: name, status: .cancelled, message: "Not imported. You can retry this file.", source: source)); continue
+                }
                 processingMessage = "Importing file \(index + 1) of \(urls.count)…"
                 let scoped = source.startAccessingSecurityScopedResource()
                 defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-                let type = try? source.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier
-                let suffix = type.flatMap { GalleryOriginalFormats.suffix(for: $0) } ?? "mov"
-                let scratch = try await workStore.allocate(extension: suffix, session: workSession)
-                let task = Task.detached(priority: .userInitiated) {
-                    try GalleryFileImport.copy(source, to: scratch)
-                    return try await GalleryFileImport.inspect(scratch, declaredType: type)
-                }
-                conversion = task
                 do {
-                    let media = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
-                    guard generation == operationGeneration else { throw CancellationError() }
-                    let saved = try await keep(media, profile: nil, session: session)
-                    try await privateStore.verifyOriginal(id: saved.id, originals: media.resources, session: session)
-                    try await workStore.remove(scratch)
-                    let updated = try await privateStore.list()
-                    if generation == operationGeneration { privateAssets = updated }
-                } catch { try? await workStore.remove(scratch); throw error }
+                    let type = try? source.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier
+                    try await importOne(source: source, type: type, incoming: false, session: session, workSession: workSession, generation: generation)
+                    outcomes.append(.init(name: name, status: .imported))
+                } catch {
+                    if error is CancellationError { importCancelled = true }
+                    outcomes.append(.init(name: name, status: error is CancellationError ? .cancelled : .failed,
+                        message: error is CancellationError ? "Import cancelled." : error.localizedDescription, source: source))
+                }
             }
             await refreshStorage()
+            if generation == operationGeneration, privateUnlocked { importReport = .init(outcomes: outcomes) }
         } catch { if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription } }
     }
 
     func importIncoming() async {
         guard privateUnlocked, !isProcessing, !isResetting else { return }
         let generation = operationGeneration
+        importCancelled = false; importReport = nil
         exportingAssetID = "incoming"; errorMessage = nil
         defer { if generation == operationGeneration { exportingAssetID = nil; processingMessage = nil; conversion = nil } }
+        var outcomes: [GalleryImportOutcome] = []
         do {
             guard let inbox = incomingInbox else { throw GalleryImportInbox.InboxError.unavailable }
-            let key = try incomingKeys.loadOrCreate()
             let pending = try await Task.detached { try inbox.pending() }.value
             let session = try await privateStore.currentSession(), workSession = await workStore.currentSession()
-            for (index, incoming) in pending.prefix(20).enumerated() {
-                try Task.checkCancellation()
-                guard generation == operationGeneration else { throw CancellationError() }
-                processingMessage = "Importing incoming file \(index + 1) of \(min(20, pending.count))…"
-                let scratch = try await workStore.allocate(extension: "mov", session: workSession)
-                let task = Task.detached(priority: .userInitiated) {
-                    let metadata = try inbox.decrypt(incoming, using: key, to: scratch)
-                    return try await GalleryFileImport.inspect(scratch, declaredType: metadata.typeIdentifier)
+            for (index, source) in pending.prefix(20).enumerated() {
+                guard generation == operationGeneration, privateUnlocked else { return }
+                let name = "Incoming item \(index + 1)"
+                if importCancelled || Task.isCancelled {
+                    outcomes.append(.init(name: name, status: .cancelled, message: "Kept in Incoming Shares.")); continue
                 }
-                conversion = task
+                processingMessage = "Importing incoming file \(index + 1) of \(min(20, pending.count))…"
                 do {
-                    let media = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
-                    guard generation == operationGeneration else { throw CancellationError() }
-                    let saved = try await keep(media, profile: nil, session: session)
-                    try await privateStore.verifyOriginal(id: saved.id, originals: media.resources, session: session)
-                    try await Task.detached { try inbox.remove(incoming) }.value
-                    try await workStore.remove(scratch)
-                    let updated = try await privateStore.list()
-                    if generation == operationGeneration { privateAssets = updated }
-                } catch { try? await workStore.remove(scratch); throw error }
+                    try await importOne(source: source, type: nil, incoming: true, session: session, workSession: workSession, generation: generation)
+                    outcomes.append(.init(name: name, status: .imported))
+                } catch {
+                    if error is CancellationError { importCancelled = true }
+                    outcomes.append(.init(name: name, status: error is CancellationError ? .cancelled : .failed,
+                        message: error.localizedDescription + " Kept in Incoming Shares."))
+                }
             }
             await refreshInbox(); await refreshStorage()
+            if generation == operationGeneration, privateUnlocked { importReport = .init(outcomes: outcomes, incoming: true) }
         } catch { if generation == operationGeneration, !(error is CancellationError) { errorMessage = error.localizedDescription } }
+    }
+
+    private func importOne(source: URL, type: String?, incoming: Bool, session: UUID, workSession: UUID, generation: UUID) async throws {
+        let scratch = try await workStore.allocate(extension: type.flatMap { GalleryOriginalFormats.suffix(for: $0) } ?? "mov", session: workSession)
+        var saved: PhotoAssetRecord?
+        do {
+            let inbox = incomingInbox
+            let key = incoming ? try incomingKeys.loadOrCreate() : nil
+            let task = Task.detached(priority: .userInitiated) {
+                if let key, let inbox {
+                    let metadata = try inbox.decrypt(source, using: key, to: scratch)
+                    return try await GalleryFileImport.inspect(scratch, declaredType: metadata.typeIdentifier)
+                }
+                try GalleryFileImport.copy(source, to: scratch)
+                return try await GalleryFileImport.inspect(scratch, declaredType: type)
+            }
+            conversion = task
+            let media = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+            guard generation == operationGeneration, !importCancelled else { throw CancellationError() }
+            saved = try await keep(media, profile: nil, session: session)
+            try await privateStore.verifyOriginal(id: saved!.id, originals: media.resources, session: session)
+            guard generation == operationGeneration else { throw CancellationError() }
+            if incoming, let inbox { try await Task.detached { try inbox.remove(source) }.value }
+            // Verification completed. A cleanup failure must not cause a retry to
+            // duplicate a successfully imported file.
+            let verified = saved!
+            saved = nil
+            try? await workStore.remove(scratch)
+            if generation == operationGeneration, privateUnlocked { privateAssets.append(verified) }
+        } catch {
+            if let saved { try? await privateStore.delete(id: saved.id, session: session) }
+            try? await workStore.remove(scratch)
+            throw error
+        }
     }
 
     func trackCover(for asset: PhotoAssetRecord, cover: GalleryRedaction, start: Double, end: Double) async throws -> [GalleryCoverKeyframe] {
@@ -1014,8 +1172,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             let items = try await privateStore.storageItems()
             let scratch = try await workStore.byteCount()
             let exports = try await exportStore.byteCount()
+            let retained = try await privateStore.recentlyDeletedBytes()
             guard generation == operationGeneration, privateUnlocked else { return }
-            storageItems = items; scratchBytes = scratch; exportBytes = exports
+            storageItems = items; scratchBytes = scratch; exportBytes = exports; deletedBytes = retained
         } catch { if generation == operationGeneration { errorMessage = error.localizedDescription } }
     }
 

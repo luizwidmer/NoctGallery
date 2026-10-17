@@ -24,8 +24,9 @@ final class GalleryVisualFixtureTests: XCTestCase {
         for index in 0..<(Self.hasMarketingMedia ? 5 : 6) {
             let data = Self.photo(index)
             let source = try await work.write(data, extension: "jpg", session: workSession)
-            let item = try await store.save(file: source, fileExtension: "jpg", kind: .photo, width: 960, height: 720,
-                duration: 0, thumbnail: data, profile: nil, session: session)
+            let item = try await store.saveOriginal(resources: [.init(url: source, fileExtension: "jpg", role: .photo, typeIdentifier: "public.jpeg")],
+                originalKind: nil, creationDate: Calendar.current.date(byAdding: .month, value: -index, to: Date()),
+                kind: .photo, width: 960, height: 720, duration: 0, thumbnail: data, session: session)
             saved.append(item)
             try await work.remove(source)
         }
@@ -261,6 +262,69 @@ final class GalleryVisualFixtureTests: XCTestCase {
             try settings.purge(); defaults.removePersistentDomain(forName: suite)
             try FileManager.default.removeItem(at: root)
         }
+    }
+
+    func testRenderNextUpdateScreensWithPhotographicMedia() async throws {
+        try XCTSkipUnless(Self.isReviewHost && Bundle.main.bundleIdentifier?.hasSuffix(".gallery-features.visual-review") == true,
+            "Render only in the disposable review app.")
+        try XCTSkipUnless(Self.hasMarketingMedia, "Provide the private photographic sample pack for rendered review.")
+        try await testInstallDisposableVisualFixtures()
+        let model = GalleryViewModel(queryInterpreter: AvailabilityFixtureInterpreter(state: .ready))
+        await model.start(); let unlocked = await model.unlockPrivate(); XCTAssertTrue(unlocked)
+        XCTAssertNil(model.organization.recentlyDeletedEnabled)
+        // This installer can use reference object tags on Simulator. Reset both
+        // opt-ins before reviewing the actual default experience.
+        await model.setVisualSearch(false); await model.setAIQueryInterpretation(false)
+        let photo = try XCTUnwrap(model.privateAssets.first { model.organization.items[$0.id]?.caption == "A slow morning" })
+        let video = try XCTUnwrap(model.privateAssets.first { $0.kind == .video })
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        func capture(_ name: String, _ screen: AnyView, bottom: Bool = false) async throws {
+            let window = UIWindow(windowScene: scene); window.frame = scene.screen.bounds
+            let host = UIHostingController(rootView: screen.environmentObject(model).environmentObject(model.lock).tint(NoctGalleryTheme.accent))
+            window.rootViewController = host; window.makeKeyAndVisible()
+            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(name.contains("timeline") ? 2_500 : 1_100))
+            if bottom {
+                func scrollView(_ view: UIView) -> UIScrollView? {
+                    if let scroll = view as? UIScrollView, scroll.bounds.width > 250, scroll.contentSize.height > scroll.bounds.height { return scroll }
+                    return view.subviews.lazy.compactMap { scrollView($0) }.first
+                }
+                if let scroll = scrollView(host.view) { scroll.setContentOffset(CGPoint(x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)), animated: false) }
+                try await Task.sleep(for: .milliseconds(350))
+            }
+            host.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true) }
+            let platform = ProcessInfo.processInfo.isiOSAppOnMac ? "mac" : (UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")
+            let attachment = XCTAttachment(image: image); attachment.name = "next-\(platform)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            XCTAssertGreaterThan(image.size.width, 300)
+            window.isHidden = true; window.rootViewController = nil
+        }
+        model.gridDensity = 2
+        try await capture("library", AnyView(GalleryView(source: .privateLibrary)))
+        try await capture("search-scopes", AnyView(GalleryView(source: .privateLibrary, initialSearchText: "photos weekend this year")))
+        try await capture("fullscreen", AnyView(GalleryFullscreenViewer(items: model.privateAssets, selectedID: photo.id)))
+        await model.organize([photo.id], edit: .photoEdits(.init(crop: CGRect(x: 0.12, y: 0.08, width: 0.76, height: 0.84), brightness: 0.05, contrast: 1.05)))
+        try await capture("crop-editor", AnyView(GalleryPhotoEditorView(asset: photo)))
+        try await capture("color-editor", AnyView(GalleryPhotoEditorView(asset: photo)), bottom: true)
+        let rect = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)
+        let mask = GalleryRedaction(rect: rect, keyframes: [.init(time: 0.5, rect: rect), .init(time: 1.5, rect: rect)])
+        let edits = GalleryShareEdits(redactions: [mask], trimStart: 0.25, trimEnd: 2.5,
+            videoMaximumEdge: 3_840, videoMaximumFrameRate: 60, silencedRanges: [.init(start: 0.75, end: 1.5)])
+        try await capture("video-timeline", AnyView(NavigationStack { Form {
+            GalleryVideoTimelineView(asset: video, time: .constant(1), edits: .constant(edits), selectedID: mask.id, onSeek: {})
+        }.navigationTitle("Video Timeline") }))
+        try await capture("video-quality", AnyView(GalleryShareFlowView(request: .init(assets: [video], profile: nil), initialEdits: edits)), bottom: true)
+        try await capture("settings-defaults", AnyView(GallerySettingsView()), bottom: true)
+        await model.setRecentlyDeleted(enabled: true)
+        await model.deletePrivate(photo)
+        try await capture("recently-deleted", AnyView(NavigationStack { GalleryRecentlyDeletedView() }))
+        let report = GalleryImportReport(outcomes: [
+            .init(name: "Weekend in Lisbon.jpg", status: .imported),
+            .init(name: "Coastal walk.mov", status: .failed, message: "This file could not be read. The source is unchanged.", source: URL(fileURLWithPath: "/layout-only/coast.mov")),
+            .init(name: "Coffee by the window.jpg", status: .imported)])
+        try await capture("import-results", AnyView(GalleryImportResultsView(report: report)))
+        try await capture("large-text", AnyView(GalleryView(source: .privateLibrary, initialSearchText: "weekend").dynamicTypeSize(.accessibility3)))
+        await model.purgeAndReset(); XCTAssertFalse(model.resetNeedsRetry)
     }
 
     private static var reviewInterpreter: any GallerySearchQueryInterpreting {

@@ -39,6 +39,13 @@ struct GalleryRedactionCanvas: View {
             }
             Text("Draw an area to blur, or select Move / resize to adjust it. Pan moves around the zoomed image.")
                 .font(.caption).foregroundStyle(.secondary)
+            if let id = selectedID, masks.contains(where: { $0.id == id }) {
+                DisclosureGroup("Precise Blur Controls") {
+                    GalleryRectangleAdjustmentView(rect: Binding(get: { masks.first(where: { $0.id == id })?.rect(at: time) ?? .zero }, set: {
+                        if let index = masks.firstIndex(where: { $0.id == id }) { masks[index].setRect($0, at: time) }
+                    }), title: "Blur area")
+                }
+            }
         }
         .padding(.vertical, 8)
         .onChange(of: masks) { old, new in
@@ -93,7 +100,7 @@ struct GalleryRedactionCanvas: View {
                     .accessibilityAddTraits(.isButton).accessibilityAction { selectedID = mask.id; mode = "move" }
                 if selected && mode == "move" {
                     Circle().fill(.white).overlay { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.caption2).foregroundStyle(.black) }
-                        .frame(width: 28, height: 28).position(x: rect.maxX * size.width, y: rect.maxY * size.height)
+                        .frame(width: 44, height: 44).contentShape(Rectangle()).position(x: rect.maxX * size.width, y: rect.maxY * size.height)
                         .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("galleryCoverCanvas"))
                             .onChanged { value in
                                 if gestureStart == nil { gestureStart = mask.rect(at: time) }

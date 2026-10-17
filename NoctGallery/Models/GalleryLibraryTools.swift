@@ -1,10 +1,11 @@
 import Foundation
 
 enum GallerySort: String, CaseIterable, Identifiable {
-    case newest, oldest, recentlyImported, largest, longest
+    case relevance, newest, oldest, recentlyImported, largest, longest
     var id: Self { self }
     var title: String {
         switch self {
+        case .relevance: "Best matches"
         case .newest: "Newest first"
         case .oldest: "Oldest first"
         case .recentlyImported: "Recently imported"
@@ -46,9 +47,9 @@ enum GalleryLibraryQuery {
     static func sorted(_ items: [PhotoAssetRecord], by sort: GallerySort, sizes: [String: GalleryStorageItem]) -> [PhotoAssetRecord] {
         items.sorted { a, b in
             switch sort {
-            case .newest, .oldest:
+            case .relevance, .newest, .oldest:
                 let lhs = a.creationDate ?? .distantPast, rhs = b.creationDate ?? .distantPast
-                if lhs != rhs { return sort == .newest ? lhs > rhs : lhs < rhs }
+                if lhs != rhs { return sort == .oldest ? lhs < rhs : lhs > rhs }
             case .recentlyImported:
                 let lhs = a.importedAt ?? a.creationDate ?? .distantPast
                 let rhs = b.importedAt ?? b.creationDate ?? .distantPast
@@ -71,12 +72,14 @@ struct GallerySharingPreset: Codable, Equatable, Identifiable, Sendable {
     var maximumDimension = 4_096
     var quality = 0.9
     var videoMaximumEdge = 1_920
+    var videoMaximumFrameRate: Int?
     var removeAudio = false
     var metadata: SyntheticMetadataProfile?
 
     func validated() throws -> Self {
         guard GalleryOrganization.validName(name), [2_048, 4_096, 8_192].contains(maximumDimension),
-              quality.isFinite, (0.65...1).contains(quality), [960, 1_280, 1_920].contains(videoMaximumEdge) else {
+              quality.isFinite, (0.65...1).contains(quality), [960, 1_280, 1_920, 3_840].contains(videoMaximumEdge),
+              videoMaximumFrameRate.map({ [30, 60].contains($0) }) != false else {
             throw GallerySettingsError.invalidRecord
         }
         if let metadata { _ = try metadata.validated() }
@@ -88,6 +91,7 @@ struct GallerySharingPreset: Codable, Equatable, Identifiable, Sendable {
               maximumDimension: 2_048, quality: 0.75, videoMaximumEdge: 960),
          Self(id: UUID(uuidString: "a0000000-0000-4000-8000-000000000002")!, name: "Clear document", format: .png,
               maximumDimension: 4_096, quality: 1, removeAudio: true),
-         Self(id: UUID(uuidString: "a0000000-0000-4000-8000-000000000003")!, name: "High quality", maximumDimension: 8_192, quality: 1)]
+         Self(id: UUID(uuidString: "a0000000-0000-4000-8000-000000000003")!, name: "High quality", maximumDimension: 8_192, quality: 1,
+              videoMaximumEdge: 3_840, videoMaximumFrameRate: 60)]
     }
 }

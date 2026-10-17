@@ -111,6 +111,7 @@ actor PrivateMediaStore {
             // Incomplete imports are never made visible as saved items.
             for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
                 where url.lastPathComponent.hasPrefix("staging-") { try manager.removeItem(at: url) }
+            try purgeExpiredDeleted()
             return try list()
         } catch { master = nil; throw error }
     }
@@ -119,9 +120,10 @@ actor PrivateMediaStore {
 
     func list() throws -> [PhotoAssetRecord] {
         guard master != nil else { throw StoreError.locked }
+        let organization = try organization()
         return try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { UUID(uuidString: $0.lastPathComponent) != nil }
-            .map { try record(id: $0.lastPathComponent).asset }
+            .filter { UUID(uuidString: $0.lastPathComponent) != nil && organization.items[$0.lastPathComponent]?.deletedAt == nil }
+            .map { try record(id: $0.lastPathComponent, organization: organization).asset }
             .sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
     }
 
@@ -169,6 +171,7 @@ actor PrivateMediaStore {
     }
 
     func thumbnail(id: String) throws -> Data {
+        _ = try record(id: id)
         let key = try itemKey(id)
         return try open(itemDirectory(id).appendingPathComponent("thumbnail.sealed"), key: key, context: id + ":thumbnail", limit: 4_194_332)
     }
@@ -266,10 +269,11 @@ actor PrivateMediaStore {
     func resources(id: String) throws -> [GalleryStoredResource] { mediaResources(try record(id: id)) }
 
     func storageItems() throws -> [String: GalleryStorageItem] {
+        let organization = try organization()
         var result: [String: GalleryStorageItem] = [:]
         for asset in try list() {
             try Task.checkCancellation()
-            let resources = mediaResources(try record(id: asset.id))
+            let resources = mediaResources(try record(id: asset.id, organization: organization))
             var bytes: Int64 = 0
             for file in try manager.contentsOfDirectory(at: itemDirectory(asset.id), includingPropertiesForKeys: nil) {
                 let attributes = try manager.attributesOfItem(atPath: file.path)
@@ -440,7 +444,115 @@ actor PrivateMediaStore {
         guard manager.fileExists(atPath: url.path) else { return .init() }
         var data = try open(url, key: organizationKey(), context: "NoctGallery.organization.v1", limit: 4_194_332)
         defer { data.resetBytes(in: data.startIndex..<data.endIndex) }
-        return try JSONDecoder().decode(GalleryOrganization.self, from: data).validated()
+        let value = try JSONDecoder().decode(GalleryOrganization.self, from: data).validated()
+        return value
+    }
+
+    static let deletedRetention: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Recovery has its own thumbnail-only access. Ordinary record access still
+    /// rejects deleted items, and originals must be restored before opening.
+    func deletedThumbnail(id: String, session expected: UUID, now: Date = Date()) throws -> Data {
+        try requireSession(expected)
+        guard now.timeIntervalSince1970.isFinite, let deleted = try organization().items[id]?.deletedAt,
+              now < deleted.addingTimeInterval(Self.deletedRetention) else { throw StoreError.invalidRecord }
+        _ = try record(id: id, includingDeleted: true)
+        return try open(itemDirectory(id).appendingPathComponent("thumbnail.sealed"), key: itemKey(id), context: id + ":thumbnail", limit: 4_194_332)
+    }
+
+    func recentlyDeleted() throws -> [GalleryDeletedItem] {
+        var value = try organization()
+        var missing: [String] = []
+        let result = try value.items.compactMap { id, item -> GalleryDeletedItem? in
+            guard let date = item.deletedAt else { return nil }
+            // A previous permanent deletion may have removed the media before a
+            // failed metadata write. Never offer those stale entries to restore.
+            guard manager.fileExists(atPath: try itemDirectory(id).path) else { missing.append(id); return nil }
+            return GalleryDeletedItem(asset: try record(id: id, includingDeleted: true).asset, deletedAt: date)
+        }.sorted { $0.deletedAt > $1.deletedAt }
+        if !missing.isEmpty {
+            for id in missing { value.items.removeValue(forKey: id) }
+            try saveOrganization(value)
+        }
+        return result
+    }
+
+    func recentlyDeletedBytes() throws -> Int64 {
+        try recentlyDeleted().reduce(0) { total, item in
+            try total + manager.contentsOfDirectory(at: itemDirectory(item.id), includingPropertiesForKeys: nil).reduce(Int64(0)) { sum, file in
+                let attributes = try manager.attributesOfItem(atPath: file.path)
+                guard attributes[.type] as? FileAttributeType == .typeRegular else { throw StoreError.invalidRecord }
+                return sum + ((attributes[.size] as? NSNumber)?.int64Value ?? 0)
+            }
+        }
+    }
+
+    func setRecentlyDeleted(enabled: Bool, session expected: UUID) throws -> GalleryOrganization {
+        try requireSession(expected)
+        var value = try organization()
+        // Disabling retention never silently erases or restores retained media.
+        guard enabled || !value.items.values.contains(where: { $0.deletedAt != nil }) else { throw StoreError.invalidRecord }
+        value.recentlyDeletedEnabled = enabled
+        try saveOrganization(value)
+        return value
+    }
+
+    func remove(ids: Set<String>, session expected: UUID, now: Date = Date()) throws {
+        try requireSession(expected)
+        guard !ids.isEmpty, ids.count <= 500, now.timeIntervalSince1970.isFinite else { throw StoreError.invalidRecord }
+        var value = try organization()
+        for id in ids { _ = try record(id: id, organization: value) }
+        if value.recentlyDeletedEnabled == true {
+            for id in ids { var item = value.items[id] ?? .init(); item.deletedAt = now; value.items[id] = item }
+            try saveOrganization(value)
+        } else {
+            try permanentlyRemove(ids: ids, organization: &value)
+        }
+    }
+
+    func restoreDeleted(ids: Set<String>, session expected: UUID, now: Date = Date()) throws {
+        try requireSession(expected)
+        guard !ids.isEmpty, ids.count <= 500, now.timeIntervalSince1970.isFinite else { throw StoreError.invalidRecord }
+        var value = try organization()
+        for id in ids {
+            guard let date = value.items[id]?.deletedAt, now < date.addingTimeInterval(Self.deletedRetention) else { throw StoreError.invalidRecord }
+            _ = try record(id: id, includingDeleted: true)
+        }
+        for id in ids { value.items[id]?.deletedAt = nil }
+        try saveOrganization(value)
+    }
+
+    func emptyRecentlyDeleted(ids: Set<String>? = nil, session expected: UUID) throws {
+        try requireSession(expected)
+        var value = try organization()
+        let deleted = Set(value.items.compactMap { $0.value.deletedAt == nil ? nil : $0.key })
+        let selected = ids ?? deleted
+        guard selected.isSubset(of: deleted), ids == nil || selected.count <= 500 else { throw StoreError.invalidRecord }
+        if !selected.isEmpty { try permanentlyRemove(ids: selected, organization: &value) }
+    }
+
+    func purgeExpiredDeleted(now: Date = Date()) throws {
+        guard now.timeIntervalSince1970.isFinite else { throw StoreError.invalidRecord }
+        var value = try organization()
+        let expired = Set(value.items.compactMap { id, item in
+            item.deletedAt.map { now >= $0.addingTimeInterval(Self.deletedRetention) } == true ? id : nil
+        })
+        if !expired.isEmpty { try permanentlyRemove(ids: expired, organization: &value) }
+    }
+
+    private func permanentlyRemove(ids: Set<String>, organization value: inout GalleryOrganization) throws {
+        do {
+            for id in ids {
+                let directory = try itemDirectory(id)
+                if manager.fileExists(atPath: directory.path) { try manager.removeItem(at: directory) }
+                value.items.removeValue(forKey: id)
+            }
+        } catch {
+            // Preserve completed deletions when a later file cannot be removed.
+            try? saveOrganization(value)
+            throw error
+        }
+        try saveOrganization(value)
     }
 
     func saveAlbum(id: UUID? = nil, name: String, session expected: UUID) throws -> GalleryOrganization {
@@ -469,7 +581,7 @@ actor PrivateMediaStore {
         guard !ids.isEmpty, ids.count <= 500 else { throw StoreError.invalidRecord }
         var value = try organization()
         for id in ids {
-            _ = try record(id: id)
+            _ = try record(id: id, organization: value)
             var item = value.items[id] ?? .init()
             switch edit {
             case .favorite(let flag): item.favorite = flag
@@ -492,6 +604,7 @@ actor PrivateMediaStore {
 
     func copyOrganization(from oldID: String, to newID: String, session expected: UUID) throws {
         try requireSession(expected)
+        _ = try record(id: oldID)
         _ = try record(id: newID)
         var value = try organization()
         value.items[newID] = value.items[oldID]
@@ -562,8 +675,9 @@ actor PrivateMediaStore {
             try MediaFileProtection.prepareDirectory(duressNext)
             if !plan.retainedIDs.isEmpty {
                 master = SymmetricKey(data: try keys.loadOrCreate(allowCreate: false))
+                let deleted = Set(try organization().items.compactMap { $0.value.deletedAt == nil ? nil : $0.key })
                 let existing = try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-                    .filter { plan.retainedIDs.contains($0.lastPathComponent) }
+                    .filter { plan.retainedIDs.contains($0.lastPathComponent) && !deleted.contains($0.lastPathComponent) }
                 for source in existing { try rekey(id: source.lastPathComponent, to: duressNext, newMaster: plan.replacementMediaKey) }
             }
             let sealedMarker = try AES.GCM.seal(marker, using: markerKey, authenticating: markerAAD).combined!
@@ -660,7 +774,11 @@ actor PrivateMediaStore {
         return try FileHandle(forReadingFrom: url)
     }
 
-    private func record(id: String) throws -> StoredRecord {
+    private func record(id: String, includingDeleted: Bool = false, organization checkedOrganization: GalleryOrganization? = nil) throws -> StoredRecord {
+        if !includingDeleted {
+            let value = try checkedOrganization ?? organization()
+            if value.items[id]?.deletedAt != nil { throw StoreError.invalidRecord }
+        }
         var data = try open(itemDirectory(id).appendingPathComponent("record.sealed"), key: itemKey(id), context: id + ":record", limit: 65_536)
         defer { data.resetBytes(in: data.startIndex..<data.endIndex) }
         let record = try JSONDecoder().decode(StoredRecord.self, from: data)

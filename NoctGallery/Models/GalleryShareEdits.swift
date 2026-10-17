@@ -64,6 +64,7 @@ struct GalleryShareEdits: Equatable, Sendable {
     var removeAudio = false
     var photoEdits: GalleryPhotoEdits?
     var videoMaximumEdge = 1_920
+    var videoMaximumFrameRate = 30
     var silencedRanges: [GalleryAudioRange] = []
     var hasSpatialOrTimedEdits: Bool {
         !redactions.isEmpty || trimStart != 0 || trimEnd != nil || photoEdits != nil || !silencedRanges.isEmpty
@@ -71,7 +72,7 @@ struct GalleryShareEdits: Equatable, Sendable {
 
     func validated(duration: Double? = nil) throws -> Self {
         guard redactions.count <= 100, redactions.allSatisfy(\.isValid), trimStart.isFinite, trimStart >= 0,
-              [960, 1_280, 1_920].contains(videoMaximumEdge), silencedRanges.count <= 100,
+              [960, 1_280, 1_920, 3_840].contains(videoMaximumEdge), [30, 60].contains(videoMaximumFrameRate), silencedRanges.count <= 100,
               silencedRanges.allSatisfy(\.isValid),
               trimEnd.map({ $0.isFinite && $0 > trimStart }) != false else { throw ImageSanitizer.SanitizationError.invalidConfiguration }
         if let photoEdits { _ = try photoEdits.validated() }

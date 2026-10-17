@@ -9,6 +9,7 @@ struct GalleryStorageView: View {
                 LabeledContent("Items", value: "\(model.privateAssets.count)")
                 LabeledContent("Original media", value: size(model.storageItems.values.reduce(0) { $0 + $1.mediaBytes }))
                 LabeledContent("Encrypted items", value: size(model.storageItems.values.reduce(0) { $0 + $1.storedBytes }))
+                LabeledContent("Recently Deleted", value: size(model.deletedBytes))
                 LabeledContent("Playback & work files", value: size(model.scratchBytes))
                 LabeledContent("Share copies", value: size(model.exportBytes))
                 Button("Clear Temporary Share Copies", systemImage: "trash") { Task { await model.purgeTemporaryExports(); await model.refreshStorage() } }

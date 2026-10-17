@@ -18,6 +18,8 @@ struct GallerySettingsRecord: Codable, Equatable {
     var photosConnected = false
     var resetPending = false
     var sharingPresets: [GallerySharingPreset]?
+    var gridDensity: Int?
+    var groupByDate: Bool?
 
     func validated() throws -> Self {
         guard [0.5, 1, 5, 10, 25].contains(randomLocationRadius),
@@ -27,6 +29,7 @@ struct GallerySettingsRecord: Codable, Equatable {
               GalleryOutputFormat(rawValue: shareOutputFormat) != nil,
               [2_048, 4_096, 8_192].contains(shareMaximumDimension),
               shareLossyQuality.isFinite, (0.65...1.0).contains(shareLossyQuality),
+              gridDensity.map({ [2, 3, 4].contains($0) }) != false,
               (sharingPresets?.count ?? 0) <= 30,
               sharingPresets?.allSatisfy({ (try? $0.validated()) != nil }) != false else {
             throw GallerySettingsError.invalidRecord
