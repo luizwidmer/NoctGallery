@@ -1,7 +1,7 @@
-<!-- Draft for 0.6.0 (14), prepared October 17, 2026. Not published. -->
+<!-- Published October 17, 2026 at https://luizwidmer.com/noct-gallery-privacy-policy/ for 0.6.0 (14). -->
 # Noct Gallery Privacy Policy
 
-Draft updated October 17, 2026. Covers Noct Gallery 0.2.0 and later. The original library-viewing features in 0.1.0 use the same local processing approach; private storage, camera and unlock features apply when available in your installed version.
+Updated October 17, 2026. Covers Noct Gallery 0.2.0 and later. The original library-viewing features in 0.1.0 use the same local processing approach; private storage, camera and unlock features apply when available in your installed version.
 
 Noct Gallery stores and processes photos and videos on your device. It has no app account, developer-operated media server, advertising SDK, analytics SDK or tracking system.
 

@@ -1,6 +1,8 @@
 # Noct Gallery 0.6.0 — build 14
 
-Implemented October 17, 2026. The app, import extension and test configurations use **0.6.0 (14)**. This is a local implementation and validation record; no 0.6.0 upload or review submission has been made.
+Submitted October 17, 2026. The app, import extension and test configurations use **0.6.0 (14)**. Source changes were committed and pushed on `main` as `0274ad1` before the signed archive was created.
+
+**App Store Connect status: Waiting for Review.** Submission [`4f1dea56-0530-4432-8634-a8c8f5913bfc`](https://appstoreconnect.apple.com/apps/6810294404/distribution/reviewsubmissions/details/4f1dea56-0530-4432-8634-a8c8f5913bfc) contains **0.6.0 (14)** for app `6810294404`. Automatic release after approval and immediate availability to all users are selected. Apple approval and public availability of this update remain pending.
 
 ## Changes
 
@@ -61,10 +63,33 @@ Photographic render tests require the private marketing sample pack in the test 
 
 The iOS 26.5 Simulator cannot run the real image classifier reliably. Three classifier-dependent tests are explicitly excluded there as documented in [the earlier validation](Validation-2026-10-09-SmartSearch.md); the real language-model test skips when unavailable. Those checks run against genuine models in the native suite. Controlled availability providers are used only for state/layout tests.
 
-Physical iPhone/iPad camera, Face ID, USB key, encoder performance and HDR-source appearance remain unverified by these local runs. A successful unsigned device build does not establish distribution signing, App Store upload, approval or availability.
+Physical iPhone/iPad camera, Face ID, USB key, encoder performance and HDR-source appearance remain unverified by these local runs. The unsigned build was a local validation step. Signing, upload and submission were subsequently verified as recorded below; Apple approval and public availability remain pending.
 
 ## Privacy and release preparation
 
-[README](../README.md), [security model](../SECURITY.md) and [media guide](MediaMetadata.md) describe the new behavior and limits. [The updated privacy policy](PrivacyPolicy-2026-10-17.md) is a draft for the next release and has not replaced the published October 9 policy. No permissions, cloud model or collection endpoint were added.
+[README](../README.md), [security model](../SECURITY.md) and [media guide](MediaMetadata.md) describe the new behavior and limits. [The updated privacy policy](PrivacyPolicy-2026-10-17.md) was published at [the public policy page](https://luizwidmer.com/noct-gallery-privacy-policy/) and read back in Safari. It covers optional seven-day encrypted recovery, temporary video timelines/waveforms, reversible color edits, English search scopes and SDR video quality limits. App Store Connect retains the same policy URL and its published **Data Not Collected** label. No permissions, cloud model or collection endpoint were added.
 
 Private build logs, test results, native captures and benchmark attachments are retained outside this repository at PICCP Project/ReleaseArtifacts/NoctGallery-0.6.0-2026-10-17/.
+
+## App Store submission
+
+The production archive and embedded import extension passed signature checks, both reporting 0.6.0 (14) and matching App Group entitlements. The shipping archive contains no test bundle or fictional marketing photographs. Xcode uploaded the archive successfully; App Store Connect processed build 14, which was selected and saved before review submission. Safari then showed the submission detail with **0.6.0 (14), Waiting for Review**. The account's submission date display is October 17, 2026 at 7:21 PM.
+
+English (U.S.) promotional text, description, What's New and review notes were saved and read back. The description explains optional recovery and its duress/reset exception, source/device video limits and SDR output. Reviewer notes cover initial PIN setup, fullscreen browsing, explicit search scopes, photo/video editing, individual import results, recovery, the separate smart-feature opt-ins and unavailable-device states, local processing and validation limits. Existing review contacts, no-account requirement, automatic release and immediate rollout were preserved. [The exact listing text](AppStore-0.6.0.md) is retained for reference.
+
+Ten iPhone screenshots (1320 × 2868) and ten iPad screenshots (2064 × 2752) were accepted and checked in this order:
+
+1. Library and date grouping.
+2. Fullscreen viewer and filmstrip.
+3. Ranked search and explicit scopes.
+4. Crop handles and original comparison.
+5. Color adjustments.
+6. Sensitive-area blur.
+7. Video output quality.
+8. Encoded export review.
+9. Optional seven-day Recently Deleted.
+10. Smart Search controls, initially off.
+
+Screenshots use native app rendering with fictional generated photography. Unchanged blur, export-review and Smart Search views are retained from 0.5.0; the other captures show 0.6.0. Phone large-display assets also supply the inherited medium-display set. iPad assets supply the other selected tablet sizes. Replacing screenshots removed only their draft associations; the old assets remain in Asset Library. No header or search-result creative assets were added.
+
+The private release directory retains the signed archive and dSYMs, upload logs, exact metadata and published policy HTML, screenshot source/compositions/order manifest, and Safari submission evidence (`release-status.json`, `evidence/submitted-release-ax.txt` and `evidence/submitted-release.png`). Submission is separate from Apple approval or public release.
