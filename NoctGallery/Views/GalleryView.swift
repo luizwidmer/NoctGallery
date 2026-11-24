@@ -48,10 +48,21 @@ struct GalleryView: View {
         let scope = searchScope
         return model.searchIndex.search(scope.subject, interpretation: model.interpretedSearch.flatMap { $0.query == scope.subject ? $0.plan : nil })
     }
-    private var filteredAssets: [PhotoAssetRecord] {
+    private var hasSearch: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var advancedFilterCount: Int {
+        [formatFilter != .all, !tagFilter.isEmpty, dateFilter, minimumDuration > 0].count(where: { $0 })
+    }
+
+    private var hasFilters: Bool {
+        filter != "all" || collection != "all" || advancedFilterCount > 0
+    }
+
+    private func filteredAssets(hits: [String: GallerySearchHit]) -> [PhotoAssetRecord] {
         let assets = source == .photos ? model.assets : model.privateAssets
         let scope = searchScope
-        let hits = source == .privateLibrary ? searchHits : [:]
         let result = assets.filter { asset in
             scope.includes(asset, organization: model.organization) && formatFilter.matches(asset) &&
             (tagFilter.isEmpty || model.organization.items[asset.id]?.tags.contains(tagFilter) == true) &&
@@ -84,6 +95,7 @@ struct GalleryView: View {
 
     private var navigationContent: some View {
         let hits = source == .privateLibrary ? searchHits : [:]
+        let visibleAssets = filteredAssets(hits: hits)
         return NavigationStack {
             VStack(spacing: 0) {
                 Picker("Media", selection: $filter) {
@@ -124,10 +136,10 @@ struct GalleryView: View {
                     HStack { ProgressView(model.processingMessage ?? "Importing…"); Spacer(); Button("Cancel Import") { model.cancelImport() } }
                         .padding(.horizontal, 16).padding(.vertical, 8)
                 }
-                if !searchText.isEmpty, source == .privateLibrary {
+                if !model.isLoading && (hasSearch || hasFilters) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(filteredAssets.count) matches").font(.footnote)
-                        if model.organization.visualSearchEnabled == true {
+                        Text("Items shown: \(visibleAssets.count)").font(.footnote.weight(.medium))
+                        if hasSearch, source == .privateLibrary, model.organization.visualSearchEnabled == true {
                             let photos = model.privateAssets.filter { $0.kind == .photo }
                             let tagged = photos.filter { model.organization.items[$0.id]?.visualTags != nil }.count
                             Text("Object search covers \(tagged) of \(photos.count) photos.").font(.caption).foregroundStyle(.secondary)
@@ -135,25 +147,8 @@ struct GalleryView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
                 }
                 if model.isLoading { Spacer(); ProgressView("Reading library…"); Spacer() }
-                else if filteredAssets.isEmpty {
-                    ContentUnavailableView {
-                        Label(searchText.isEmpty ? (source == .privateLibrary ? "Your Private Gallery" : "No Media Available") : "No Matches",
-                              systemImage: source == .privateLibrary ? "lock.rectangle.stack" : "photo.stack")
-                    } description: {
-                        Text(!searchText.isEmpty ? (source == .privateLibrary ? (model.showsSmartSearch ? "Try another word, or open Smart Search to check photo tagging." : "Try another tag, note or media detail.") : "Try another date, format or media type.") : source == .privateLibrary
-                             ? "Take a private photo or video, or copy selected media from the Photos tab."
-                             : "Photos and videos you allow access to appear here.")
-                    } actions: {
-                        if source == .privateLibrary, searchText.isEmpty {
-                            Button("Import from Photos", systemImage: "photo.on.rectangle") { model.selectedTab = 0 }.buttonStyle(.borderedProminent)
-                            Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }.buttonStyle(.bordered)
-                            Button("Open Private Camera", systemImage: "camera") { showCamera = true }.buttonStyle(.bordered)
-                        } else if source == .privateLibrary, model.showsSmartSearch {
-                            Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }
-                                .buttonStyle(.borderedProminent).disabled(!model.smartFeaturesAvailable)
-                            if !model.smartFeaturesAvailable { Text(model.queryInterpreterAvailability.message).font(.footnote) }
-                        }
-                    }
+                else if visibleAssets.isEmpty {
+                    emptyState
                 } else {
                     ScrollView {
                         if source == .photos && model.authorizationStatus == .limited {
@@ -161,7 +156,7 @@ struct GalleryView: View {
                                 .font(.footnote).foregroundStyle(.secondary).padding(.bottom, 8)
                         }
                         LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(mediaSections) { section in
+                            ForEach(mediaSections(for: visibleAssets)) { section in
                                 if let title = section.title { Text(title).font(.headline).padding(.top, 8) }
                                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columnCount), spacing: 8) {
                                     ForEach(section.assets) { asset in
@@ -185,10 +180,13 @@ struct GalleryView: View {
             .navigationTitle(source == .photos ? "Photos" : "Private")
             .searchable(text: $searchText, prompt: source == .privateLibrary ? (model.showsSmartSearch ? "Objects, scenes, tags or text" : "Tags, notes or media details") : "Dates, dimensions or type")
             .autocorrectionDisabled().textInputAutocapitalization(.never)
-            .fullScreenCover(item: $viewingAsset) { GalleryFullscreenViewer(items: filteredAssets, selectedID: $0.id) }
+            .fullScreenCover(item: $viewingAsset) { GalleryFullscreenViewer(items: visibleAssets, selectedID: $0.id) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sort & Filter", systemImage: "line.3.horizontal.decrease") { showsFilters = true }
+                    Button("Sort & Filter", systemImage: advancedFilterCount > 0 ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease") {
+                        showsFilters = true
+                    }
+                    .accessibilityValue(advancedFilterCount > 0 ? "\(advancedFilterCount) additional filters" : "No additional filters")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(selecting ? "Done" : "Select") { selecting.toggle(); selection = [] }
@@ -218,7 +216,12 @@ struct GalleryView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { if selecting { selectionBar } }
+            .safeAreaInset(edge: .bottom) {
+                if selecting {
+                    let visibleSelectionCount = visibleAssets.count(where: { selection.contains($0.id) })
+                    selectionBar(hiddenCount: selection.count - visibleSelectionCount)
+                }
+            }
             .sheet(isPresented: $showsAlbums) { GalleryAlbumsView() }
             .sheet(isPresented: $showsSmartSearch) { NavigationStack { GallerySmartSearchView() } }
             .sheet(isPresented: $showsOrganize) { GalleryOrganizeView(ids: selection) }
@@ -249,13 +252,58 @@ struct GalleryView: View {
         }
     }
 
+    @ViewBuilder
+    private var emptyState: some View {
+        if hasSearch || hasFilters {
+            ContentUnavailableView {
+                Label("No Matching Items", systemImage: "magnifyingglass")
+            } description: {
+                Text(hasSearch && hasFilters ? "Try a different search or clear your filters."
+                     : hasSearch ? "Try a different search." : "Clear the filters to see more items.")
+            } actions: {
+                if hasSearch {
+                    Button("Clear Search") { searchText = "" }.buttonStyle(.bordered)
+                }
+                if hasFilters {
+                    Button("Clear Library Filters") {
+                        filter = "all"
+                        collection = "all"
+                        resetAdvancedFilters()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if hasSearch, source == .privateLibrary, model.showsSmartSearch {
+                    Button("Smart Search", systemImage: "sparkle.magnifyingglass") { showsSmartSearch = true }
+                        .buttonStyle(.bordered).disabled(!model.smartFeaturesAvailable)
+                    if !model.smartFeaturesAvailable {
+                        Text(model.queryInterpreterAvailability.message).font(.footnote)
+                    }
+                }
+            }
+        } else {
+            ContentUnavailableView {
+                Label(source == .privateLibrary ? "Your Private Gallery" : "No Media Available",
+                      systemImage: source == .privateLibrary ? "lock.rectangle.stack" : "photo.stack")
+            } description: {
+                Text(source == .privateLibrary
+                     ? "Take a private photo or video, or copy selected media from the Photos tab."
+                     : "Photos and videos you allow access to appear here.")
+            } actions: {
+                if source == .privateLibrary {
+                    Button("Import from Photos", systemImage: "photo.on.rectangle") { model.selectedTab = 0 }.buttonStyle(.borderedProminent)
+                    Button("Import from Files", systemImage: "square.and.arrow.down") { showsImport = true }.buttonStyle(.bordered)
+                    Button("Open Private Camera", systemImage: "camera") { showCamera = true }.buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
     private struct MediaSection: Identifiable {
         let id: String
         let title: String?
         var assets: [PhotoAssetRecord]
     }
-    private var mediaSections: [MediaSection] {
-        let assets = filteredAssets
+    private func mediaSections(for assets: [PhotoAssetRecord]) -> [MediaSection] {
         guard model.groupByDate, searchText.isEmpty, sort == .newest || sort == .oldest || sort == .relevance else {
             return [.init(id: "all", title: nil, assets: assets)]
         }
@@ -354,11 +402,23 @@ struct GalleryView: View {
                         Text("Any length").tag(0.0); Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0)
                     }
                 }
-                Section { Button("Reset Filters") { sort = .relevance; formatFilter = .all; tagFilter = ""; dateFilter = false; minimumDuration = 0 } }
+                Section {
+                    Button("Reset Sort & Filters") {
+                        sort = source == .photos ? .newest : .relevance
+                        resetAdvancedFilters()
+                    }
+                }
             }
             .navigationTitle("Sort & Filter").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsFilters = false } } }
         }
+    }
+
+    private func resetAdvancedFilters() {
+        formatFilter = .all
+        tagFilter = ""
+        dateFilter = false
+        minimumDuration = 0
     }
 
     private func tile(_ asset: PhotoAssetRecord) -> some View {
@@ -392,10 +452,11 @@ struct GalleryView: View {
         else if selection.count < 500 { selection.insert(id) }
     }
 
-    private var selectionBar: some View {
+    private func selectionBar(hiddenCount: Int) -> some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(selection.count) selected")
+                if hiddenCount > 0 { Text("\(hiddenCount) outside this view").font(.caption2) }
                 if selection.count > 20 { Text("Share up to 20 at a time").font(.caption2) }
             }.font(.footnote).foregroundStyle(.secondary)
             Spacer(minLength: 0)
